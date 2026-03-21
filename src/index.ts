@@ -43,22 +43,7 @@ export interface Env {
 function buildEnv(): Env {
   const required = [
     "SLACK_BOT_TOKEN",
-    "SLACK_SIGNING_SECRET",
     "SLACK_INCIDENTS_CHANNEL",
-    "TWILIO_ACCOUNT_SID",
-    "TWILIO_AUTH_TOKEN",
-    "TWILIO_FROM_NUMBER",
-    "SERVER_URL",
-    "STATUSPAGE_API_KEY",
-    "STATUSPAGE_PAGE_ID",
-    "STATUSPAGE_COMPONENT_ID",
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
-    "GOOGLE_REFRESH_TOKEN",
-    "GITHUB_TOKEN",
-    "GITHUB_REPO_OWNER",
-    "GITHUB_REPO_NAME",
-    "ANTHROPIC_API_KEY",
   ];
 
   for (const key of required) {
@@ -91,23 +76,54 @@ async function start() {
   const env = buildEnv();
 
   // Seed team contacts from team_contacts.json
-  await seed_contacts(db);
+  await seed_contacts(db).catch((err) =>
+    console.warn("[seed] skipped:", err.message)
+  );
 
   const app = Fastify({ logger: true });
 
+  // ── Parse application/x-www-form-urlencoded (Slack slash commands) ──────
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      const obj: Record<string, string> = {};
+      for (const [k, v] of new URLSearchParams(body as string)) obj[k] = v;
+      done(null, obj);
+    }
+  );
+
+  // ── Allow empty JSON bodies (some monitoring webhooks send no body) ──────
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      if (!body) return done(null, {});
+      try { done(null, JSON.parse(body as string)); }
+      catch (e) { done(e as Error, undefined); }
+    }
+  );
+
   // ── Slack slash command: /incident start <description> ──────────────────
   app.post("/slack/slash", async (req, reply) => {
-    const params = new URLSearchParams(req.body as string);
-    const text = params.get("text") ?? "";
+    const body = req.body as Record<string, string>;
+    const text = body.text ?? "";
 
     if (text.startsWith("start")) {
       const description =
         text.replace(/^start\s*/i, "").trim() || "Incident reported via slash command";
-      const result = await handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description);
-      return reply.send({
-        response_type: "in_channel",
-        text: `🚨 Incident \`${result.incident_id}\` opened. Check <#${env.SLACK_INCIDENTS_CHANNEL}> for updates.`,
+
+      // Respond to Slack immediately (must be within 3s or Slack times out)
+      reply.send({
+        response_type: "ephemeral",
+        text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
       });
+
+      // Run B0 in background after replying
+      handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description).catch((err) =>
+        console.error("[b0] background error:", err)
+      );
+      return;
     }
 
     return reply.send({

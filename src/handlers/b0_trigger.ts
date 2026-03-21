@@ -20,16 +20,18 @@ export async function handle_b0(
   const start_time = get_current_time();
   const incident_id = generate_incident_id(start_time);
 
-  // 1. Status page: investigating
-  await status_page_update(
-    "investigating",
-    "🔵 We are investigating a potential issue. Our team is checking.",
-    {
-      STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
-      STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
-      STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
-    }
-  );
+  // 1. Status page: investigating (best-effort — skip if not configured)
+  if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
+    await status_page_update(
+      "investigating",
+      "🔵 We are investigating a potential issue. Our team is checking.",
+      {
+        STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+        STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+        STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+      }
+    ).catch((err) => console.warn("[b0] statuspage skipped:", err.message));
+  }
 
   // 2. Create Slack thread in #incidents (or reply in IC's channel)
   const initialMessage = `🚨 *Incident Detected* | ID: \`${incident_id}\`\nTime: ${start_time}\nTrigger: ${trigger_description}\n\n_Awaiting IC classification..._`;
