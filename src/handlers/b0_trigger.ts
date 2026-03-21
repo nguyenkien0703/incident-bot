@@ -16,7 +16,7 @@ export async function handle_b0(
   env: Env,
   ic_channel: string,
   trigger_description: string
-): Promise<{ incident_id: string; start_time: string; slack_thread_ts: string }> {
+): Promise<{ incident_id: string; start_time: string; slack_thread_ts: string; description: string }> {
   const start_time = get_current_time();
   const incident_id = generate_incident_id(start_time);
 
@@ -59,5 +59,5 @@ export async function handle_b0(
     env.SLACK_BOT_TOKEN
   );
 
-  return { incident_id, start_time, slack_thread_ts: thread_ts };
+  return { incident_id, start_time, slack_thread_ts: thread_ts, description: trigger_description };
 }
