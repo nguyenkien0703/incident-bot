@@ -17,7 +17,7 @@ import {
 import { get_team_contacts, get_by_role } from "../utils/contacts";
 import { get_current_time } from "../utils/time";
 import { slack_reply_to_thread, slack_post_message, slack_tag_user, slack_open_dm } from "../tools/slack";
-import { initiate_escalation } from "../escalation/initiate_escalation";
+import { phone_call } from "../tools/twilio";
 import { status_page_update } from "../tools/statuspage";
 import { calendar_create_meeting } from "../tools/calendar";
 import type { Env } from "../index";
@@ -150,19 +150,19 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
 
       const escalationMsg = `Incident ${input.incident_id} severity ${priority} on lumilink-be. Please join Slack incidents channel immediately.`;
 
-      // Send DM and start Slack Call simultaneously
+      // Send DM + phone call simultaneously (no delay)
       await Promise.all([
         slack_post_message(contact.slack_id, dm, env.SLACK_BOT_TOKEN).catch((err) =>
           console.error(`[b1] DM failed for ${contact.slack_id}:`, err.message)
         ),
-        shouldEscalate
-          ? initiate_escalation(
-              { slack_id: contact.slack_id, phone: contact.phone, name: contact.name },
-              escalationMsg,
-              input.incident_id,
-              env
-            ).catch((err) =>
-              console.error(`[b1] escalation failed for ${contact.slack_id}:`, err.message)
+        shouldEscalate && contact.phone && env.TWILIO_ACCOUNT_SID
+          ? phone_call(contact.phone, escalationMsg, {
+              TWILIO_ACCOUNT_SID: env.TWILIO_ACCOUNT_SID,
+              TWILIO_AUTH_TOKEN: env.TWILIO_AUTH_TOKEN,
+              TWILIO_FROM_NUMBER: env.TWILIO_FROM_NUMBER,
+              SERVER_URL: env.SERVER_URL,
+            }).catch((err) =>
+              console.error(`[b1] phone call failed for ${contact.name}:`, err.message)
             )
           : Promise.resolve(),
       ]);
