@@ -63,11 +63,11 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     env.SLACK_BOT_TOKEN
   );
 
-  // 2. Create Google Meet and post link to thread (best-effort)
+  // 2. Create Google Meet (best-effort) — link will be sent in thread + every DM
+  let meetLink: string | null = null;
   if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN) {
-    const contacts = await get_team_contacts(env.db).catch(() => []);
-    const emails = contacts.map((c) => c.email).filter(Boolean);
-
+    const allContacts = await get_team_contacts(env.db).catch(() => []);
+    const emails = allContacts.map((c) => c.email).filter(Boolean);
     const meeting = await calendar_create_meeting(
       `[${priority}] Incident Response — ${input.incident_id}`,
       emails,
@@ -77,16 +77,14 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
         GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
         GOOGLE_REFRESH_TOKEN: env.GOOGLE_REFRESH_TOKEN,
       }
-    ).catch((err) => {
-      console.warn("[b1] calendar skipped:", err.message);
-      return null;
-    });
+    ).catch((err) => { console.warn("[b1] calendar skipped:", err.message); return null; });
 
     if (meeting) {
+      meetLink = meeting.meeting_link;
       await slack_reply_to_thread(
         env.SLACK_INCIDENTS_CHANNEL,
         input.slack_thread_ts,
-        `📹 *War Room* — Join the incident call:\n${meeting.meeting_link}`,
+        `📹 *War Room* — Join the incident call:\n${meetLink}`,
         env.SLACK_BOT_TOKEN
       ).catch(console.error);
     }
@@ -129,7 +127,12 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
 
   await Promise.all(
     uniqueNotify.map(async (contact) => {
-      const dm = `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*\nDescription: ${input.description}\nPlease check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`;
+      const dm = [
+        `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*`,
+        `Description: ${input.description}`,
+        `Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`,
+        meetLink ? `📹 War Room: ${meetLink}` : "",
+      ].filter(Boolean).join("\n");
 
       const shouldEscalate =
         priority === "P0" ||
