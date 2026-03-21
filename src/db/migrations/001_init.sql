@@ -2,9 +2,9 @@ CREATE TABLE IF NOT EXISTS team_contacts (
   id        SERIAL PRIMARY KEY,
   name      TEXT NOT NULL,
   role      TEXT NOT NULL,
-  slack_id  TEXT NOT NULL UNIQUE,
+  slack_id  TEXT NOT NULL,
   phone     TEXT,
-  email     TEXT NOT NULL,
+  email     TEXT NOT NULL UNIQUE,
   timezone  TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh'
 );
 
