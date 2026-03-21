@@ -14,6 +14,7 @@ export interface Env {
   SLACK_SIGNING_SECRET: string;
   SLACK_INCIDENTS_CHANNEL: string;
   SLACK_MONITOR_CHANNEL: string; // channel ID of infra-noti-ai-team
+  SLACK_TEAM_ID: string;         // workspace team ID (e.g. T051U708XN3)
 
   // Twilio
   TWILIO_ACCOUNT_SID: string;
@@ -60,6 +61,7 @@ function buildEnv(): Env {
     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET!,
     SLACK_INCIDENTS_CHANNEL: process.env.SLACK_INCIDENTS_CHANNEL!,
     SLACK_MONITOR_CHANNEL: process.env.SLACK_MONITOR_CHANNEL ?? "",
+    SLACK_TEAM_ID: process.env.SLACK_TEAM_ID ?? "",
     TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID!,
     TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN!,
     TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER!,

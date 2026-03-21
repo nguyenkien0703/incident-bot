@@ -56,6 +56,15 @@ export function slack_tag_user(user_id: string): string {
   return `<@${user_id}>`;
 }
 
+/**
+ * Opens a DM channel with a user and returns the channel ID.
+ * Required scope: im:write
+ */
+export async function slack_open_dm(user_id: string, token: string): Promise<string> {
+  const data = await slackApi("conversations.open", { users: user_id }, token);
+  return ((data.channel as Record<string, unknown>).id as string);
+}
+
 export function slack_tag_group(group_name: string): string {
   return `<!subteam^${group_name}>`;
 }
