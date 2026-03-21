@@ -1,0 +1,33 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./team_contacts.json:/app/team_contacts.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: incident_bot
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./src/db/migrations:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d incident_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
