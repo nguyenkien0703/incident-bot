@@ -3,6 +3,10 @@ import type { Pool } from "pg";
 import { db } from "./db/client";
 import { seed_contacts } from "./db/seed";
 import { handle_b0 } from "./handlers/b0_trigger";
+import { handle_b1 } from "./handlers/b1_classify";
+import { parse_ic_reply } from "./handlers/slack_events";
+import { register_incident, claim_incident } from "./state";
+import { slack_reply_to_thread } from "./tools/slack";
 
 export interface Env {
   // Slack
@@ -119,10 +123,10 @@ async function start() {
         text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
       });
 
-      // Run B0 in background after replying
-      handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description).catch((err) =>
-        console.error("[b0] background error:", err)
-      );
+      // Run B0 in background after replying, then register for B1
+      handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
+        .then((result) => register_incident(result))
+        .catch((err) => console.error("[b0] background error:", err));
       return;
     }
 
@@ -138,9 +142,67 @@ async function start() {
     async (req, reply) => {
       const description = req.body?.title ?? req.body?.message ?? "Automated monitoring alert";
       const result = await handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description);
+      register_incident(result);
       return reply.send({ ok: true, incident_id: result.incident_id });
     }
   );
+
+  // ── Slack Events API — IC replies in thread to classify incident ─────────
+  app.post("/slack/events", async (req, reply) => {
+    const payload = req.body as Record<string, unknown>;
+
+    // Slack URL verification handshake (one-time setup)
+    if (payload.type === "url_verification") {
+      return reply.send({ challenge: payload.challenge });
+    }
+
+    // Ack immediately — Slack requires response within 3s
+    reply.send({ ok: true });
+
+    const event = payload.event as Record<string, unknown> | undefined;
+    if (!event) return;
+
+    // Ignore bot messages and non-message events
+    if (event.bot_id || event.subtype === "bot_message") return;
+    if (event.type !== "message") return;
+
+    // Only process thread replies (thread_ts exists and differs from ts)
+    const thread_ts = event.thread_ts as string | undefined;
+    const ts = event.ts as string | undefined;
+    if (!thread_ts || thread_ts === ts) return;
+
+    // Only act on threads we're tracking
+    const pending = claim_incident(thread_ts);
+    if (!pending) return;
+
+    const text = (event.text as string) ?? "";
+    const ic_slack_id = (event.user as string) ?? "unknown";
+    const { type, impact, users_affected } = parse_ic_reply(text);
+
+    // If IC didn't include incident type, ask again
+    if (!type) {
+      register_incident(pending); // un-claim so IC can retry
+      await slack_reply_to_thread(
+        env.SLACK_INCIDENTS_CHANNEL,
+        thread_ts,
+        `❓ Không nhận ra incident type. Vui lòng include một trong:\n\`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`\n\nVí dụ: _AVAILABILITY, 200 users, payment: yes, critical_`,
+        env.SLACK_BOT_TOKEN
+      ).catch(console.error);
+      return;
+    }
+
+    // Run B1 in background
+    handle_b1(env, {
+      incident_id: pending.incident_id,
+      start_time: pending.start_time,
+      slack_thread_ts: pending.slack_thread_ts,
+      description: pending.description,
+      type,
+      ic_name: `<@${ic_slack_id}>`,
+      users_affected,
+      impact,
+    }).catch((err) => console.error("[b1] error:", err));
+  });
 
   // ── TwiML endpoint — Twilio fetches this when making a phone call ───────
   app.get<{ Querystring: { msg?: string } }>("/twiml", (req, reply) => {

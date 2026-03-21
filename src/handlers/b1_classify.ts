@@ -122,16 +122,18 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     }
   }
 
-  // 3. Update status page
-  await status_page_update(
-    "investigating",
-    `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
-    {
-      STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
-      STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
-      STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
-    }
-  );
+  // 3. Update status page (best-effort)
+  if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
+    await status_page_update(
+      "investigating",
+      `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
+      {
+        STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+        STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+        STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+      }
+    ).catch((err) => console.warn("[b1] statuspage skipped:", err.message));
+  }
 
   return priority;
 }

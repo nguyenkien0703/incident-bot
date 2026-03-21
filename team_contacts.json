@@ -1,26 +1,26 @@
 [
   {
-    "name": "Nguyen Van A",
+    "name": "Dinh Tien An",
     "role": "TechLead",
-    "slack_id": "U012AB3CD",
+    "slack_id": "U093D0L3R8F",
     "phone": "+84901234567",
-    "email": "a@yourcompany.com",
+    "email": "andt@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
   },
   {
     "name": "Nguyen Van Kien",
     "role": "DevOps",
-    "slack_id": "U056EF7GH",
+    "slack_id": "U093U6BTRQU",
     "phone": "+84907654321",
     "email": "b@yourcompany.com",
     "timezone": "Asia/Ho_Chi_Minh"
   },
   {
-    "name": "Le Van C",
-    "role": "PM",
-    "slack_id": "U089IJ0KL",
+    "name": "Nguyen Duc Ban",
+    "role": "P0",
+    "slack_id": "U0A6JVALHNF",
     "phone": null,
-    "email": "c@yourcompany.com",
+    "email": "bannd@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
   },
   {
