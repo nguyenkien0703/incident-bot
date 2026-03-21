@@ -15,7 +15,7 @@ import {
   type IncidentType,
 } from "../utils/priority";
 import { get_team_contacts, get_by_role } from "../utils/contacts";
-import { is_business_hours, get_current_time } from "../utils/time";
+import { get_current_time } from "../utils/time";
 import { slack_reply_to_thread, slack_post_message, slack_tag_user } from "../tools/slack";
 import { initiate_escalation } from "../escalation/initiate_escalation";
 import { status_page_update } from "../tools/statuspage";
@@ -127,30 +127,34 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     return true;
   });
 
-  const businessHours = is_business_hours(now);
+  await Promise.all(
+    uniqueNotify.map(async (contact) => {
+      const dm = `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*\nDescription: ${input.description}\nPlease check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`;
 
-  for (const contact of uniqueNotify) {
-    // Always send Slack DM
-    const dm = `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}* requires your attention. Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`;
-    await slack_post_message(contact.slack_id, dm, env.SLACK_BOT_TOKEN);
-
-    // Off-hours: escalate via Slack Call (with phone fallback after 1 min)
-    if (!businessHours) {
       const shouldEscalate =
         priority === "P0" ||
         (priority === "P1" && (contact.role === "TechLead" || contact.role === "DevOps"));
 
-      if (shouldEscalate) {
-        const message = `Incident ${input.incident_id} severity ${priority} on lumilink-be. Please join Slack incidents channel immediately.`;
-        await initiate_escalation(
-          { slack_id: contact.slack_id, phone: contact.phone, name: contact.name },
-          message,
-          input.incident_id,
-          env
-        );
-      }
-    }
-  }
+      const escalationMsg = `Incident ${input.incident_id} severity ${priority} on lumilink-be. Please join Slack incidents channel immediately.`;
+
+      // Send DM and start Slack Call simultaneously
+      await Promise.all([
+        slack_post_message(contact.slack_id, dm, env.SLACK_BOT_TOKEN).catch((err) =>
+          console.error(`[b1] DM failed for ${contact.slack_id}:`, err.message)
+        ),
+        shouldEscalate
+          ? initiate_escalation(
+              { slack_id: contact.slack_id, phone: contact.phone, name: contact.name },
+              escalationMsg,
+              input.incident_id,
+              env
+            ).catch((err) =>
+              console.error(`[b1] escalation failed for ${contact.slack_id}:`, err.message)
+            )
+          : Promise.resolve(),
+      ]);
+    })
+  );
 
   // 3. Update status page (best-effort)
   if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
