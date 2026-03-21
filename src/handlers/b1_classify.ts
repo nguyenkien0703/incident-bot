@@ -19,6 +19,7 @@ import { is_business_hours, get_current_time } from "../utils/time";
 import { slack_reply_to_thread, slack_post_message, slack_tag_user } from "../tools/slack";
 import { initiate_escalation } from "../escalation/initiate_escalation";
 import { status_page_update } from "../tools/statuspage";
+import { calendar_create_meeting } from "../tools/calendar";
 import type { Env } from "../index";
 
 export interface ClassifyInput {
@@ -62,7 +63,36 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     env.SLACK_BOT_TOKEN
   );
 
-  // 2. Determine who to notify
+  // 2. Create Google Meet and post link to thread (best-effort)
+  if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN) {
+    const contacts = await get_team_contacts(env.db).catch(() => []);
+    const emails = contacts.map((c) => c.email).filter(Boolean);
+
+    const meeting = await calendar_create_meeting(
+      `[${priority}] Incident Response — ${input.incident_id}`,
+      emails,
+      `Incident: ${input.description}\nPriority: ${priority}\nIC: ${input.ic_name}`,
+      {
+        GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
+        GOOGLE_REFRESH_TOKEN: env.GOOGLE_REFRESH_TOKEN,
+      }
+    ).catch((err) => {
+      console.warn("[b1] calendar skipped:", err.message);
+      return null;
+    });
+
+    if (meeting) {
+      await slack_reply_to_thread(
+        env.SLACK_INCIDENTS_CHANNEL,
+        input.slack_thread_ts,
+        `📹 *War Room* — Join the incident call:\n${meeting.meeting_link}`,
+        env.SLACK_BOT_TOKEN
+      ).catch(console.error);
+    }
+  }
+
+  // 3. Determine who to notify
   const toNotify: typeof contacts = [];
   const isHigh = isHighSeverity(priority);
 
