@@ -68,3 +68,34 @@ export async function slack_open_dm(user_id: string, token: string): Promise<str
 export function slack_tag_group(group_name: string): string {
   return `<!subteam^${group_name}>`;
 }
+
+/**
+ * Post a Block Kit message in a thread. Returns the new message ts.
+ */
+export async function slack_reply_blocks(
+  channel: string,
+  thread_ts: string,
+  blocks: object[],
+  text: string,
+  token: string
+): Promise<string> {
+  const data = await slackApi(
+    "chat.postMessage",
+    { channel, thread_ts, blocks, text },
+    token
+  );
+  return (data.ts as string) ?? "";
+}
+
+/**
+ * Update an existing message in place (e.g. to disable buttons after a click).
+ */
+export async function slack_update_message(
+  channel: string,
+  ts: string,
+  blocks: object[],
+  text: string,
+  token: string
+): Promise<void> {
+  await slackApi("chat.update", { channel, ts, blocks, text }, token);
+}

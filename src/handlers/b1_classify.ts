@@ -15,11 +15,19 @@ import {
   type IncidentType,
 } from "../utils/priority";
 import { get_team_contacts, get_by_role } from "../utils/contacts";
-import { get_current_time } from "../utils/time";
-import { slack_reply_to_thread, slack_post_message, slack_tag_user, slack_open_dm } from "../tools/slack";
+import { get_current_time, format_duration } from "../utils/time";
+import {
+  slack_reply_to_thread,
+  slack_post_message,
+  slack_tag_user,
+  slack_open_dm,
+  slack_reply_blocks,
+} from "../tools/slack";
+import { build_status_buttons } from "../tools/slack_blocks";
 import { phone_call } from "../tools/twilio";
 import { status_page_update } from "../tools/statuspage";
 import { calendar_create_meeting } from "../tools/calendar";
+import { register_active_incident, type ActiveIncident } from "../state";
 import type { Env } from "../index";
 
 export interface ClassifyInput {
@@ -28,6 +36,7 @@ export interface ClassifyInput {
   slack_thread_ts: string;
   type: IncidentType;
   description: string;
+  ic_slack_id: string;
   ic_name: string;
   users_affected: number;
   impact: BusinessImpact;
@@ -181,6 +190,63 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
       }
     ).catch((err) => console.warn("[b1] statuspage skipped:", err.message));
   }
+
+  // 4. Register active incident + post interactive status buttons
+  const activeInc: ActiveIncident = {
+    incident_id: input.incident_id,
+    start_time: input.start_time,
+    slack_thread_ts: input.slack_thread_ts,
+    slack_channel: env.SLACK_INCIDENTS_CHANNEL,
+    description: input.description,
+    type: input.type,
+    priority,
+    ic_slack_id: input.ic_slack_id,
+    ic_name: input.ic_name,
+    users_affected: input.users_affected,
+    payment_affected: input.impact.payment_affected,
+    data_integrity_affected: input.impact.data_integrity_affected,
+    phase: "investigating",
+    awaiting: null,
+    ping_count: 0,
+    timeline: [
+      { time: input.start_time, event: "Incident detected", actor: "system" },
+      { time: now, event: `Classified as ${priority} (${input.type})`, actor: input.ic_name },
+    ],
+  };
+
+  // Post the first status-button message in thread
+  await slack_reply_blocks(
+    env.SLACK_INCIDENTS_CHANNEL,
+    input.slack_thread_ts,
+    build_status_buttons(input.incident_id, "investigating"),
+    `Incident ${input.incident_id} — update the status when ready`,
+    env.SLACK_BOT_TOKEN
+  ).catch((err) => console.error("[b1] status buttons failed:", err.message));
+
+  // Start 15-minute proactive ping timer (stops automatically after 20 pings = 5h)
+  // const PING_INTERVAL_MS = 15 * 60 * 1000;
+  const PING_INTERVAL_MS =  10 * 1000;
+  activeInc.ping_timer = setInterval(async () => {
+    if (activeInc.phase === "resolved") {
+      clearInterval(activeInc.ping_timer);
+      return;
+    }
+    activeInc.ping_count++;
+    if (activeInc.ping_count > 20) {
+      clearInterval(activeInc.ping_timer);
+      return;
+    }
+    const elapsed = format_duration(activeInc.start_time, get_current_time());
+    await slack_reply_blocks(
+      env.SLACK_INCIDENTS_CHANNEL,
+      activeInc.slack_thread_ts,
+      build_status_buttons(activeInc.incident_id, activeInc.phase),
+      `⏰ Ping #${activeInc.ping_count} — ${elapsed} elapsed. Please update the incident status.`,
+      env.SLACK_BOT_TOKEN
+    ).catch((err) => console.error("[ping] failed:", err.message));
+  }, PING_INTERVAL_MS);
+
+  register_active_incident(activeInc);
 
   return priority;
 }

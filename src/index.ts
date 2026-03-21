@@ -5,8 +5,15 @@ import { seed_contacts } from "./db/seed";
 import { handle_b0 } from "./handlers/b0_trigger";
 import { handle_b1 } from "./handlers/b1_classify";
 import { parse_ic_reply } from "./handlers/slack_events";
-import { register_incident, claim_incident, should_trigger_incident } from "./state";
+import {
+  register_incident,
+  claim_incident,
+  should_trigger_incident,
+  get_active_by_thread,
+} from "./state";
+import { handle_slack_action, type SlackActionPayload } from "./handlers/slack_actions";
 import { slack_reply_to_thread } from "./tools/slack";
+import { get_current_time } from "./utils/time";
 
 export interface Env {
   // Slack
@@ -236,13 +243,52 @@ async function start() {
       return;
     }
 
-    // ── Role 2: Thread reply in incidents channel → B1 classification ──────
+    // ── Role 2: Thread reply in incidents channel ───────────────────────────
     if (!isThreadReply) return;
 
+    const user_slack_id = (event.user as string) ?? "unknown";
+
+    // Sub-role 2a: Active incident awaiting a follow-up response (root cause / fix)
+    const activeInc = get_active_by_thread(thread_ts!);
+    if (activeInc && activeInc.awaiting) {
+      const now = get_current_time();
+      if (activeInc.awaiting === "root_cause") {
+        activeInc.root_cause = text;
+        activeInc.awaiting = null;
+        activeInc.timeline.push({
+          time: now,
+          event: `Root cause: ${text}`,
+          actor: `<@${user_slack_id}>`,
+        });
+        await slack_reply_to_thread(
+          env.SLACK_INCIDENTS_CHANNEL,
+          thread_ts!,
+          `📝 *Root cause recorded:*\n> ${text}`,
+          env.SLACK_BOT_TOKEN
+        ).catch(console.error);
+      } else if (activeInc.awaiting === "fix_description") {
+        activeInc.fix_description = text;
+        activeInc.awaiting = null;
+        activeInc.timeline.push({
+          time: now,
+          event: `Fix applied: ${text}`,
+          actor: `<@${user_slack_id}>`,
+        });
+        await slack_reply_to_thread(
+          env.SLACK_INCIDENTS_CHANNEL,
+          thread_ts!,
+          `📝 *Fix recorded:*\n> ${text}`,
+          env.SLACK_BOT_TOKEN
+        ).catch(console.error);
+      }
+      return;
+    }
+
+    // Sub-role 2b: Pending incident → B1 classification
     const pending = claim_incident(thread_ts!);
     if (!pending) return;
 
-    const ic_slack_id = (event.user as string) ?? "unknown";
+    const ic_slack_id = user_slack_id;
     const { type, impact, users_affected } = parse_ic_reply(text);
 
     // If IC didn't include incident type, ask again
@@ -263,10 +309,35 @@ async function start() {
       slack_thread_ts: pending.slack_thread_ts,
       description: pending.description,
       type,
+      ic_slack_id,
       ic_name: `<@${ic_slack_id}>`,
       users_affected,
       impact,
     }).catch((err) => console.error("[b1] error:", err));
+  });
+
+  // ── Slack interactive actions (Block Kit button clicks) ──────────────────
+  app.post("/slack/actions", async (req, reply) => {
+    // Slack sends payload as URL-encoded JSON in the "payload" field
+    const body = req.body as Record<string, string>;
+    const raw = body.payload;
+    if (!raw) return reply.send({ ok: false, error: "no payload" });
+
+    let payload: SlackActionPayload;
+    try {
+      payload = JSON.parse(raw) as SlackActionPayload;
+    } catch {
+      return reply.send({ ok: false, error: "invalid payload" });
+    }
+
+    if (payload.type !== "block_actions") return reply.send({ ok: true });
+
+    // Ack immediately — Slack requires response within 3s
+    reply.send({ ok: true });
+
+    handle_slack_action(env, payload).catch((err) =>
+      console.error("[actions] error:", err)
+    );
   });
 
   // ── TwiML endpoint — Twilio fetches this when making a phone call ───────

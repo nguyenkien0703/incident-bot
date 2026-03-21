@@ -1,6 +1,7 @@
 /**
- * In-memory store for incidents awaiting IC classification (B0 → B1 bridge)
- * Keyed by slack thread_ts (unique per thread)
+ * In-memory store for incidents:
+ *  - pending: awaiting IC classification (B0 → B1 bridge)
+ *  - active:  classified, in-progress incidents (B1 → resolution)
  */
 
 export interface PendingIncident {
@@ -10,24 +11,35 @@ export interface PendingIncident {
   description: string;
 }
 
-const pending = new Map<string, PendingIncident & { classified: boolean }>();
-
-// Cooldown store: errorKey → last triggered timestamp
-// Prevents duplicate incidents from the same repeated error within a window
-const alertCooldown = new Map<string, number>();
-
-/**
- * Check if we should trigger a new incident for this error.
- * Returns true only if no incident was triggered for the same key within cooldownMs.
- * Default cooldown: 5 minutes.
- */
-export function should_trigger_incident(errorKey: string, cooldownMs = 5 * 60 * 1000): boolean {
-  const last = alertCooldown.get(errorKey);
-  const now = Date.now();
-  if (last && now - last < cooldownMs) return false;
-  alertCooldown.set(errorKey, now);
-  return true;
+export interface ActiveIncident {
+  incident_id: string;
+  start_time: string;
+  slack_thread_ts: string;
+  slack_channel: string;
+  description: string;
+  type: string;
+  priority: string;
+  ic_slack_id: string;
+  ic_name: string;
+  users_affected: number;
+  payment_affected: boolean;
+  data_integrity_affected: boolean;
+  /** Current phase in the incident lifecycle */
+  phase: "investigating" | "identified" | "monitoring" | "resolved";
+  root_cause?: string;
+  fix_description?: string;
+  /**
+   * When set, the next thread reply from any user in this incident's thread
+   * will be captured as the specified field value.
+   */
+  awaiting?: "root_cause" | "fix_description" | null;
+  ping_count: number;
+  timeline: { time: string; event: string; actor: string }[];
+  ping_timer?: ReturnType<typeof setInterval>;
 }
+
+// ── Pending incidents (B0 → B1) ─────────────────────────────────────────────
+const pending = new Map<string, PendingIncident & { classified: boolean }>();
 
 /** Register a new incident after B0 creates the Slack thread */
 export function register_incident(inc: PendingIncident): void {
@@ -48,4 +60,46 @@ export function claim_incident(thread_ts: string): PendingIncident | null {
     slack_thread_ts: inc.slack_thread_ts,
     description: inc.description,
   };
+}
+
+// ── Active incidents (B1 → resolution) ──────────────────────────────────────
+const active = new Map<string, ActiveIncident>(); // keyed by incident_id
+
+export function register_active_incident(inc: ActiveIncident): void {
+  active.set(inc.incident_id, inc);
+}
+
+export function get_active_incident(incident_id: string): ActiveIncident | null {
+  return active.get(incident_id) ?? null;
+}
+
+/** Find an active incident by its Slack thread ts */
+export function get_active_by_thread(thread_ts: string): ActiveIncident | null {
+  for (const inc of active.values()) {
+    if (inc.slack_thread_ts === thread_ts) return inc;
+  }
+  return null;
+}
+
+/** Stop pings and remove from the active map */
+export function resolve_active_incident(incident_id: string): void {
+  const inc = active.get(incident_id);
+  if (inc?.ping_timer) clearInterval(inc.ping_timer);
+  active.delete(incident_id);
+}
+
+// ── Cooldown store (monitor-channel dedup) ───────────────────────────────────
+const alertCooldown = new Map<string, number>();
+
+/**
+ * Check if we should trigger a new incident for this error.
+ * Returns true only if no incident was triggered for the same key within cooldownMs.
+ * Default cooldown: 5 minutes.
+ */
+export function should_trigger_incident(errorKey: string, cooldownMs = 5 * 60 * 1000): boolean {
+  const last = alertCooldown.get(errorKey);
+  const now = Date.now();
+  if (last && now - last < cooldownMs) return false;
+  alertCooldown.set(errorKey, now);
+  return true;
 }
