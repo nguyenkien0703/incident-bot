@@ -5,7 +5,7 @@ import { seed_contacts } from "./db/seed";
 import { handle_b0 } from "./handlers/b0_trigger";
 import { handle_b1 } from "./handlers/b1_classify";
 import { parse_ic_reply } from "./handlers/slack_events";
-import { register_incident, claim_incident } from "./state";
+import { register_incident, claim_incident, should_trigger_incident } from "./state";
 import { slack_reply_to_thread } from "./tools/slack";
 
 export interface Env {
@@ -13,6 +13,7 @@ export interface Env {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   SLACK_INCIDENTS_CHANNEL: string;
+  SLACK_MONITOR_CHANNEL: string; // channel ID of infra-noti-ai-team
 
   // Twilio
   TWILIO_ACCOUNT_SID: string;
@@ -58,6 +59,7 @@ function buildEnv(): Env {
     SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN!,
     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET!,
     SLACK_INCIDENTS_CHANNEL: process.env.SLACK_INCIDENTS_CHANNEL!,
+    SLACK_MONITOR_CHANNEL: process.env.SLACK_MONITOR_CHANNEL ?? "",
     TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID!,
     TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN!,
     TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER!,
@@ -74,6 +76,47 @@ function buildEnv(): Env {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
     db,
   };
+}
+
+/**
+ * Parse a message from the infra monitoring channel (infra-noti-ai-team).
+ * Returns a short incident description, or null if the message should be ignored.
+ *
+ * Triggers on: "🔥 500 Error - PRODUCTION" style messages
+ * Ignores: "Error Update: X Additional Occurrence" (repeat/summary alerts)
+ */
+function parse_monitor_alert(text: string): string | null {
+  // Ignore repeat/summary alerts — these are just noise
+  if (/error update|additional occurrence/i.test(text)) return null;
+
+  // Only process messages that look like an error alert
+  if (!/\d{3}\s*error|status code[:\s]+[45]\d{2}/i.test(text)) return null;
+
+  const statusMatch = text.match(/Status Code[:\s]+(\d+)/i);
+  const requestMatch = text.match(/Request[:\s]+([A-Z]+)\s+(https?:\/\/\S+)/i);
+  const envMatch = text.match(/Environment[:\s]+(\w+)/i);
+  const errorMsgMatch = text.match(/Error Message[:\s]+(.+)/i);
+
+  const status = statusMatch?.[1] ?? "5xx";
+  const env = envMatch?.[1] ?? "production";
+  const errorMsg = errorMsgMatch?.[1]?.trim();
+
+  let description = `${status} error`;
+
+  if (requestMatch) {
+    const method = requestMatch[1];
+    try {
+      const path = new URL(requestMatch[2]).pathname;
+      description += ` on ${method} ${path}`;
+    } catch {
+      description += ` on ${requestMatch[1]} ${requestMatch[2]}`;
+    }
+  }
+
+  if (errorMsg) description += ` — ${errorMsg}`;
+  description += ` [${env}]`;
+
+  return description;
 }
 
 async function start() {
@@ -147,7 +190,9 @@ async function start() {
     }
   );
 
-  // ── Slack Events API — IC replies in thread to classify incident ─────────
+  // ── Slack Events API — two roles:
+  //    1. Top-level message in monitor channel → auto-trigger B0
+  //    2. Thread reply in incidents channel → IC classification (B1)
   app.post("/slack/events", async (req, reply) => {
     const payload = req.body as Record<string, unknown>;
 
@@ -162,20 +207,39 @@ async function start() {
     const event = payload.event as Record<string, unknown> | undefined;
     if (!event) return;
 
-    // Ignore bot messages and non-message events
+    // Ignore bot messages
     if (event.bot_id || event.subtype === "bot_message") return;
     if (event.type !== "message") return;
 
-    // Only process thread replies (thread_ts exists and differs from ts)
+    const channel = event.channel as string | undefined;
+    const text = (event.text as string) ?? "";
     const thread_ts = event.thread_ts as string | undefined;
     const ts = event.ts as string | undefined;
-    if (!thread_ts || thread_ts === ts) return;
+    const isThreadReply = !!thread_ts && thread_ts !== ts;
 
-    // Only act on threads we're tracking
-    const pending = claim_incident(thread_ts);
+    // ── Role 1: Monitor channel → auto-trigger B0 ──────────────────────────
+    if (env.SLACK_MONITOR_CHANNEL && channel === env.SLACK_MONITOR_CHANNEL && !isThreadReply) {
+      const description = parse_monitor_alert(text);
+      if (description) {
+        // Use error description as cooldown key — same error within 5min = skip
+        if (should_trigger_incident(description)) {
+          console.log(`[monitor] auto-trigger B0: ${description}`);
+          handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
+            .then((result) => register_incident(result))
+            .catch((err) => console.error("[monitor] B0 error:", err));
+        } else {
+          console.log(`[monitor] cooldown active, skipping: ${description}`);
+        }
+      }
+      return;
+    }
+
+    // ── Role 2: Thread reply in incidents channel → B1 classification ──────
+    if (!isThreadReply) return;
+
+    const pending = claim_incident(thread_ts!);
     if (!pending) return;
 
-    const text = (event.text as string) ?? "";
     const ic_slack_id = (event.user as string) ?? "unknown";
     const { type, impact, users_affected } = parse_ic_reply(text);
 
@@ -184,14 +248,13 @@ async function start() {
       register_incident(pending); // un-claim so IC can retry
       await slack_reply_to_thread(
         env.SLACK_INCIDENTS_CHANNEL,
-        thread_ts,
+        thread_ts!,
         `❓ Không nhận ra incident type. Vui lòng include một trong:\n\`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`\n\nVí dụ: _AVAILABILITY, 200 users, payment: yes, critical_`,
         env.SLACK_BOT_TOKEN
       ).catch(console.error);
       return;
     }
 
-    // Run B1 in background
     handle_b1(env, {
       incident_id: pending.incident_id,
       start_time: pending.start_time,

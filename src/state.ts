@@ -12,6 +12,23 @@ export interface PendingIncident {
 
 const pending = new Map<string, PendingIncident & { classified: boolean }>();
 
+// Cooldown store: errorKey → last triggered timestamp
+// Prevents duplicate incidents from the same repeated error within a window
+const alertCooldown = new Map<string, number>();
+
+/**
+ * Check if we should trigger a new incident for this error.
+ * Returns true only if no incident was triggered for the same key within cooldownMs.
+ * Default cooldown: 5 minutes.
+ */
+export function should_trigger_incident(errorKey: string, cooldownMs = 5 * 60 * 1000): boolean {
+  const last = alertCooldown.get(errorKey);
+  const now = Date.now();
+  if (last && now - last < cooldownMs) return false;
+  alertCooldown.set(errorKey, now);
+  return true;
+}
+
 /** Register a new incident after B0 creates the Slack thread */
 export function register_incident(inc: PendingIncident): void {
   pending.set(inc.slack_thread_ts, { ...inc, classified: false });

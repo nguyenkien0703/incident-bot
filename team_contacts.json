@@ -2,7 +2,7 @@
   {
     "name": "Dinh Tien An",
     "role": "TechLead",
-    "slack_id": "U093D0L3R8F",
+    "slack_id": "U093D0L3R8F1",
     "phone": "+84901234567",
     "email": "andt@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -18,7 +18,7 @@
   {
     "name": "Nguyen Duc Ban",
     "role": "P0",
-    "slack_id": "U0A6JVALHNF",
+    "slack_id": "U0A6JVALHNF1",
     "phone": null,
     "email": "bannd@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -26,7 +26,7 @@
   {
     "name": "Pham Van D",
     "role": "CEO",
-    "slack_id": "U101MN2OP",
+    "slack_id": "U101MN2OP1",
     "phone": "+84912345678",
     "email": "d@yourcompany.com",
     "timezone": "Asia/Ho_Chi_Minh"
