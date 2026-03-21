@@ -27,19 +27,35 @@ export async function seed_contacts(pool: Pool): Promise<void> {
   const raw = fs.readFileSync(filePath, "utf-8");
   const contacts: ContactRow[] = JSON.parse(raw);
 
+  let upserted = 0;
+  let skipped = 0;
+
   for (const c of contacts) {
-    await pool.query(
+    const result = await pool.query(
       `INSERT INTO team_contacts (name, role, slack_id, phone, email, timezone)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (slack_id) DO UPDATE SET
+       ON CONFLICT (email) DO UPDATE SET
          name     = EXCLUDED.name,
          role     = EXCLUDED.role,
+         slack_id = EXCLUDED.slack_id,
          phone    = EXCLUDED.phone,
-         email    = EXCLUDED.email,
-         timezone = EXCLUDED.timezone`,
+         timezone = EXCLUDED.timezone
+       WHERE
+         team_contacts.name     IS DISTINCT FROM EXCLUDED.name     OR
+         team_contacts.role     IS DISTINCT FROM EXCLUDED.role     OR
+         team_contacts.slack_id IS DISTINCT FROM EXCLUDED.slack_id OR
+         team_contacts.phone    IS DISTINCT FROM EXCLUDED.phone    OR
+         team_contacts.timezone IS DISTINCT FROM EXCLUDED.timezone
+       RETURNING id`,
       [c.name, c.role, c.slack_id, c.phone ?? null, c.email, c.timezone ?? "Asia/Ho_Chi_Minh"]
     );
+
+    if (result.rowCount && result.rowCount > 0) {
+      upserted++;
+    } else {
+      skipped++;
+    }
   }
 
-  console.log(`[seed] Upserted ${contacts.length} contacts`);
+  console.log(`[seed] ${upserted} upserted, ${skipped} unchanged`);
 }

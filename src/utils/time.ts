@@ -6,10 +6,11 @@ export function get_current_time(): string {
   return new Date().toISOString();
 }
 
-export function generate_incident_id(now?: string): string {
-  const d = now ? new Date(now) : new Date();
+export function generate_incident_id(now?: string, utcOffsetHours = 7): string {
+  const utc = (now ? new Date(now) : new Date()).getTime();
+  const local = new Date(utc + utcOffsetHours * 3600000);
   const pad = (n: number, len = 2) => String(n).padStart(len, "0");
-  return `INC-${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
+  return `INC-${local.getUTCFullYear()}${pad(local.getUTCMonth() + 1)}${pad(local.getUTCDate())}-${pad(local.getUTCHours())}${pad(local.getUTCMinutes())}`;
 }
 
 export function format_duration(start: string, end: string): string {

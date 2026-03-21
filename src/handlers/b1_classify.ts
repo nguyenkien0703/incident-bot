@@ -15,10 +15,11 @@ import {
   type IncidentType,
 } from "../utils/priority";
 import { get_team_contacts, get_by_role } from "../utils/contacts";
-import { is_business_hours, get_current_time } from "../utils/time";
-import { slack_reply_to_thread, slack_post_message, slack_tag_user } from "../tools/slack";
-import { initiate_escalation } from "../escalation/initiate_escalation";
+import { get_current_time } from "../utils/time";
+import { slack_reply_to_thread, slack_post_message, slack_tag_user, slack_open_dm } from "../tools/slack";
+import { phone_call } from "../tools/twilio";
 import { status_page_update } from "../tools/statuspage";
+import { calendar_create_meeting } from "../tools/calendar";
 import type { Env } from "../index";
 
 export interface ClassifyInput {
@@ -62,7 +63,34 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     env.SLACK_BOT_TOKEN
   );
 
-  // 2. Determine who to notify
+  // 2. Create Google Meet (best-effort) — link will be sent in thread + every DM
+  let meetLink: string | null = null;
+  if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN) {
+    const allContacts = await get_team_contacts(env.db).catch(() => []);
+    const emails = allContacts.map((c) => c.email).filter(Boolean);
+    const meeting = await calendar_create_meeting(
+      `[${priority}] Incident Response — ${input.incident_id}`,
+      emails,
+      `Incident: ${input.description}\nPriority: ${priority}\nIC: ${input.ic_name}`,
+      {
+        GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
+        GOOGLE_REFRESH_TOKEN: env.GOOGLE_REFRESH_TOKEN,
+      }
+    ).catch((err) => { console.warn("[b1] calendar skipped:", err.message); return null; });
+
+    if (meeting) {
+      meetLink = meeting.meeting_link;
+      await slack_reply_to_thread(
+        env.SLACK_INCIDENTS_CHANNEL,
+        input.slack_thread_ts,
+        `📹 *War Room* — Join the incident call:\n${meetLink}`,
+        env.SLACK_BOT_TOKEN
+      ).catch(console.error);
+    }
+  }
+
+  // 3. Determine who to notify
   const toNotify: typeof contacts = [];
   const isHigh = isHighSeverity(priority);
 
@@ -97,41 +125,62 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     return true;
   });
 
-  const businessHours = is_business_hours(now);
+  await Promise.all(
+    uniqueNotify.map(async (contact) => {
+      // Build huddle link for this user's DM channel with the bot
+      let huddleLink = "";
+      if (env.SLACK_TEAM_ID) {
+        const dmChannelId = await slack_open_dm(contact.slack_id, env.SLACK_BOT_TOKEN).catch(() => "");
+        if (dmChannelId) {
+          huddleLink = `https://app.slack.com/huddle/${env.SLACK_TEAM_ID}/${dmChannelId}`;
+        }
+      }
 
-  for (const contact of uniqueNotify) {
-    // Always send Slack DM
-    const dm = `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}* requires your attention. Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`;
-    await slack_post_message(contact.slack_id, dm, env.SLACK_BOT_TOKEN);
+      const dm = [
+        `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*`,
+        `Description: ${input.description}`,
+        `Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`,
+        huddleLink ? `📞 *Join Huddle ngay:* ${huddleLink}` : "",
+        meetLink ? `📹 *War Room (Meet):* ${meetLink}` : "",
+      ].filter(Boolean).join("\n");
 
-    // Off-hours: escalate via Slack Call (with phone fallback after 1 min)
-    if (!businessHours) {
       const shouldEscalate =
         priority === "P0" ||
         (priority === "P1" && (contact.role === "TechLead" || contact.role === "DevOps"));
 
-      if (shouldEscalate) {
-        const message = `Incident ${input.incident_id} severity ${priority} on lumilink-be. Please join Slack incidents channel immediately.`;
-        await initiate_escalation(
-          { slack_id: contact.slack_id, phone: contact.phone, name: contact.name },
-          message,
-          input.incident_id,
-          env
-        );
-      }
-    }
-  }
+      const escalationMsg = `Incident ${input.incident_id} severity ${priority} on lumilink-be. Please join Slack incidents channel immediately.`;
 
-  // 3. Update status page
-  await status_page_update(
-    "investigating",
-    `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
-    {
-      STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
-      STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
-      STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
-    }
+      // Send DM + phone call simultaneously (no delay)
+      await Promise.all([
+        slack_post_message(contact.slack_id, dm, env.SLACK_BOT_TOKEN).catch((err) =>
+          console.error(`[b1] DM failed for ${contact.slack_id}:`, err.message)
+        ),
+        shouldEscalate && contact.phone && env.TWILIO_ACCOUNT_SID
+          ? phone_call(contact.phone, escalationMsg, {
+              TWILIO_ACCOUNT_SID: env.TWILIO_ACCOUNT_SID,
+              TWILIO_AUTH_TOKEN: env.TWILIO_AUTH_TOKEN,
+              TWILIO_FROM_NUMBER: env.TWILIO_FROM_NUMBER,
+              SERVER_URL: env.SERVER_URL,
+            }).catch((err) =>
+              console.error(`[b1] phone call failed for ${contact.name}:`, err.message)
+            )
+          : Promise.resolve(),
+      ]);
+    })
   );
+
+  // 3. Update status page (best-effort)
+  if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
+    await status_page_update(
+      "investigating",
+      `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
+      {
+        STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+        STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+        STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+      }
+    ).catch((err) => console.warn("[b1] statuspage skipped:", err.message));
+  }
 
   return priority;
 }
