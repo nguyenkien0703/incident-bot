@@ -7,9 +7,7 @@ import {
   register_incident,
   should_trigger_incident,
   get_active_by_thread,
-  resolve_active_incident,
 } from "./state";
-import { update_action_items } from "./tools/github";
 import {
   handle_slack_action,
   handle_view_submission,
@@ -241,78 +239,10 @@ async function start() {
 
     const user_slack_id = (event.user as string) ?? "unknown";
 
-    // Check if there's an active incident awaiting B5 confirmation from IC
+    // B5 is now fully interactive (buttons) — thread replies are ignored
     const activeInc = get_active_by_thread(thread_ts!);
-    if (activeInc && activeInc.awaiting_b5) {
-      activeInc.awaiting_b5 = false;
-
-      // Build final action items markdown:
-      // If IC replied "confirmed" → use AI proposals as-is
-      // Otherwise parse "1: @kien, 1 week / 2: confirmed / 3: @devops, 3 days"
-      const proposals = activeInc.b5_proposals ?? [];
-      let finalItems: string;
-
-      if (/^confirmed$/i.test(text.trim()) || proposals.length === 0) {
-        finalItems = proposals.length > 0
-          ? proposals.map((a, i) => `${i + 1}. **${a.action}**\n   - Owner: ${a.suggested_owner}\n   - ETA: ${a.suggested_eta}`).join("\n")
-          : text;
-      } else {
-        // Parse overrides like "1: @kien, 2 weeks / 2: confirmed / 3: @devops, 3 days"
-        const overrides = new Map<number, string>();
-        for (const part of text.split(/\s*\/\s*/)) {
-          const m = part.match(/^(\d+)\s*:\s*(.+)$/);
-          if (m) overrides.set(parseInt(m[1]), m[2].trim());
-        }
-        finalItems = proposals
-          .map((a, i) => {
-            const override = overrides.get(i + 1);
-            if (!override || /^confirmed$/i.test(override)) {
-              return `${i + 1}. **${a.action}**\n   - Owner: ${a.suggested_owner}\n   - ETA: ${a.suggested_eta}`;
-            }
-            return `${i + 1}. **${a.action}**\n   - ${override}`;
-          })
-          .join("\n");
-      }
-
-      // Update GitHub report file with final action items
-      if (activeInc.report_file_path && env.GITHUB_TOKEN) {
-        update_action_items(activeInc.report_file_path, finalItems, {
-          GITHUB_TOKEN: env.GITHUB_TOKEN,
-          GITHUB_REPO_OWNER: env.GITHUB_REPO_OWNER,
-          GITHUB_REPO_NAME: env.GITHUB_REPO_NAME,
-        })
-          .then((url) =>
-            slack_reply_to_thread(
-              env.SLACK_INCIDENTS_CHANNEL,
-              thread_ts!,
-              `✅ *Incident ${activeInc.incident_id} fully closed.*\nPost-mortem updated with action items: ${url}`,
-              env.SLACK_BOT_TOKEN
-            )
-          )
-          .catch((err) => {
-            console.error("[b5] update failed:", err.message);
-            slack_reply_to_thread(
-              env.SLACK_INCIDENTS_CHANNEL,
-              thread_ts!,
-              `✅ *Incident ${activeInc.incident_id} closed.* (Report update failed: ${err.message})`,
-              env.SLACK_BOT_TOKEN
-            ).catch(console.error);
-          });
-      } else {
-        await slack_reply_to_thread(
-          env.SLACK_INCIDENTS_CHANNEL,
-          thread_ts!,
-          `✅ *Incident ${activeInc.incident_id} fully closed.*`,
-          env.SLACK_BOT_TOKEN
-        ).catch(console.error);
-      }
-
-      resolve_active_incident(activeInc.incident_id);
-      return;
-    }
-
     if (activeInc) {
-      console.log(`[events] thread reply ignored for incident ${activeInc.incident_id}`);
+      console.log(`[events] thread reply ignored for incident ${activeInc.incident_id} — use B5 buttons`);
     }
   });
 

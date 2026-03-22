@@ -202,6 +202,158 @@ export function build_resolved_block(incident_id: string, actor: string): object
   ];
 }
 
+// ── B5 interactive blocks ────────────────────────────────────────────────────
+
+export interface B5Item {
+  action: string;
+  owner: string;
+  eta: string;
+  status: "pending" | "confirmed" | "removed";
+}
+
+/**
+ * Per-item interactive B5 message.
+ * Each pending item shows: ✅ Confirm | 👤 Change Owner | ⏱ Change ETA | 🗑 Remove
+ */
+export function build_b5_blocks(incident_id: string, items: B5Item[]): object[] {
+  const rows: object[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "*📋 B5 — AI Prevention Plan*\n🤖 Review each item — confirm, adjust owner/ETA, or remove:",
+      },
+    },
+    { type: "divider" },
+  ];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const val = `${incident_id}:${i}`;
+    const icon = item.status === "confirmed" ? "✅" : item.status === "removed" ? "❌" : "⏳";
+    const actionText = item.status === "removed" ? `~${item.action}~` : item.action;
+
+    rows.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${icon} *${i + 1}. ${actionText}*\n👤 Owner: *${item.owner}*  |  ⏱ ETA: *${item.eta}*`,
+      },
+    });
+
+    if (item.status === "pending") {
+      rows.push({
+        type: "actions",
+        block_id: `b5_${incident_id}_${i}_${Date.now()}`,
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "✅ Confirm", emoji: true },
+            value: val,
+            action_id: "b5_confirm",
+            style: "primary",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "👤 Owner", emoji: true },
+            value: val,
+            action_id: "b5_owner",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "⏱ ETA", emoji: true },
+            value: val,
+            action_id: "b5_eta",
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "🗑 Remove", emoji: true },
+            value: val,
+            action_id: "b5_remove",
+            style: "danger",
+          },
+        ],
+      });
+    }
+
+    rows.push({ type: "divider" });
+  }
+
+  const pending = items.filter((i) => i.status === "pending").length;
+  rows.push(
+    pending > 0
+      ? {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `_${pending} item(s) pending — confirm or remove all to finalize the report_`,
+            },
+          ],
+        }
+      : {
+          type: "section",
+          text: { type: "mrkdwn", text: "✅ *All items reviewed! Finalizing report...*" },
+        }
+  );
+
+  return rows;
+}
+
+/** Modal to pick a new owner (Slack user picker) */
+export function build_b5_owner_modal(metadata: string): object {
+  return {
+    type: "modal",
+    callback_id: "b5_owner_submit",
+    private_metadata: metadata,
+    title: { type: "plain_text", text: "Change Owner" },
+    submit: { type: "plain_text", text: "Update" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "owner_block",
+        label: { type: "plain_text", text: "Select new owner" },
+        element: {
+          type: "users_select",
+          action_id: "owner_user",
+          placeholder: { type: "plain_text", text: "Choose a team member" },
+        },
+      },
+    ],
+  };
+}
+
+/** Modal to pick a new ETA */
+export function build_b5_eta_modal(metadata: string): object {
+  return {
+    type: "modal",
+    callback_id: "b5_eta_submit",
+    private_metadata: metadata,
+    title: { type: "plain_text", text: "Change ETA" },
+    submit: { type: "plain_text", text: "Update" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "eta_block",
+        label: { type: "plain_text", text: "New ETA" },
+        element: {
+          type: "static_select",
+          action_id: "eta_value",
+          options: [
+            { text: { type: "plain_text", text: "3 days" },   value: "3 days" },
+            { text: { type: "plain_text", text: "1 week" },   value: "1 week" },
+            { text: { type: "plain_text", text: "2 weeks" },  value: "2 weeks" },
+            { text: { type: "plain_text", text: "1 month" },  value: "1 month" },
+            { text: { type: "plain_text", text: "3 months" }, value: "3 months" },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 // ── Root cause modal ─────────────────────────────────────────────────────────
 
 export function build_root_cause_modal(incident_id: string): object {

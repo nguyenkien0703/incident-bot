@@ -37,15 +37,17 @@ export interface ActiveIncident {
   ping_count: number;
   timeline: { time: string; event: string; actor: string }[];
   ping_timer?: ReturnType<typeof setInterval>;
-  /** Path of the post-mortem file written by B4 (used by B5 to update action items) */
+  /** Path of the post-mortem file written by B4 */
   report_file_path?: string;
-  /**
-   * True while waiting for IC to confirm AI-suggested B5 action items.
-   * When set, the next thread reply captures owner/ETA confirmations.
-   */
-  awaiting_b5?: boolean;
-  /** AI-generated prevention proposals, stored so IC can confirm them */
-  b5_proposals?: Array<{ action: string; suggested_owner: string; suggested_eta: string }>;
+  /** ts of the B5 interactive message (for in-place updates when buttons are clicked) */
+  b5_message_ts?: string;
+  /** Per-item B5 state — each item can be confirmed, adjusted, or removed */
+  b5_items?: Array<{
+    action: string;
+    owner: string;   // human-readable name (may be updated by IC)
+    eta: string;     // may be updated by IC
+    status: "pending" | "confirmed" | "removed";
+  }>;
 }
 
 // ── Pending incidents (B0 → B1) ─────────────────────────────────────────────

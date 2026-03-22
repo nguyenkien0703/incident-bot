@@ -88,6 +88,19 @@ export async function slack_reply_blocks(
 }
 
 /**
+ * Resolve a Slack user_id to a human-readable display name.
+ */
+export async function slack_get_user_name(user_id: string, token: string): Promise<string> {
+  try {
+    const data = await slackApi("users.info", { user: user_id }, token);
+    const profile = ((data.user as Record<string, unknown>).profile as Record<string, unknown>);
+    return (profile.display_name as string || profile.real_name as string) || user_id;
+  } catch {
+    return user_id;
+  }
+}
+
+/**
  * Open a Slack modal. trigger_id must be used within 3 seconds of the action.
  */
 export async function slack_open_modal(
