@@ -102,7 +102,7 @@ export async function slack_get_user_name(user_id: string, token: string): Promi
     return (profile.display_name as string || profile.real_name as string) || user_id;
   } catch (err) {
     console.warn(`[slack] users.info failed for ${user_id}:`, (err as Error).message);
-    return user_id;
+    return `<@${user_id}>`; // Slack renders this as the user's display name
   }
 }
 
