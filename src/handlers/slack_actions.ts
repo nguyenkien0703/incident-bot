@@ -82,7 +82,7 @@ export async function handle_slack_action(
 
   const channel = payload.channel.id;
   const button_msg_ts = payload.message.ts;
-  const actor = `<@${payload.user.id}>`;
+  // Use display name for report readability; fall back to Slack mention for non-IC actors
   const now = get_current_time();
 
   // ── Open classify modal ─────────────────────────────────────────────────
@@ -113,6 +113,11 @@ export async function handle_slack_action(
     console.warn(`[actions] no active incident for id=${incident_id}`);
     return;
   }
+
+  // Resolve actor name: use display name if user is the IC, else Slack mention
+  const actor = payload.user.id === inc.ic_slack_id
+    ? inc.ic_display_name
+    : `<@${payload.user.id}>`;
 
   // ── Root Cause Identified ───────────────────────────────────────────────
   if (action.action_id === "incident_identified") {
@@ -258,7 +263,6 @@ export async function handle_view_submission(
   payload: ViewSubmissionPayload
 ): Promise<void> {
   const { callback_id, private_metadata, state } = payload.view;
-  const actor = `<@${payload.user.id}>`;
   const now = get_current_time();
   const vals = state.values;
 
@@ -309,14 +313,15 @@ export async function handle_view_submission(
   if (callback_id === "root_cause_submit") {
     const inc = get_active_incident(private_metadata);
     if (!inc) return;
+    const display = payload.user.id === inc.ic_slack_id ? inc.ic_display_name : `<@${payload.user.id}>`;
     const root_cause = vals.root_cause_block?.root_cause?.value ?? "";
     inc.root_cause = root_cause;
     inc.awaiting = null;
-    inc.timeline.push({ time: now, event: `Root cause: ${root_cause}`, actor });
+    inc.timeline.push({ time: now, event: `Root cause: ${root_cause}`, actor: display });
     await slack_reply_to_thread(
       inc.slack_channel,
       inc.slack_thread_ts,
-      `📝 *Root cause recorded* by ${actor}:\n> ${root_cause}`,
+      `📝 *Root cause recorded* by ${display}:\n> ${root_cause}`,
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
     return;
@@ -326,14 +331,15 @@ export async function handle_view_submission(
   if (callback_id === "fix_description_submit") {
     const inc = get_active_incident(private_metadata);
     if (!inc) return;
+    const display = payload.user.id === inc.ic_slack_id ? inc.ic_display_name : `<@${payload.user.id}>`;
     const fix_description = vals.fix_block?.fix_description?.value ?? "";
     inc.fix_description = fix_description;
     inc.awaiting = null;
-    inc.timeline.push({ time: now, event: `Fix applied: ${fix_description}`, actor });
+    inc.timeline.push({ time: now, event: `Fix applied: ${fix_description}`, actor: display });
     await slack_reply_to_thread(
       inc.slack_channel,
       inc.slack_thread_ts,
-      `📝 *Fix recorded* by ${actor}:\n> ${fix_description}`,
+      `📝 *Fix recorded* by ${display}:\n> ${fix_description}`,
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
     return;

@@ -125,21 +125,44 @@ export function build_classify_modal(private_metadata: string, description: stri
 // ── Status buttons (posted after B1, and every ping) ────────────────────────
 
 /**
- * 3 status buttons. The button matching `phase` is highlighted (primary style).
+ * Sequential step buttons — guides IC through the 3-step flow.
+ * Only the NEXT logical step is highlighted (primary/green).
+ * Completed steps are shown as plain text checkmarks above the buttons.
  */
 export function build_status_buttons(incident_id: string, phase: string): object[] {
   const label = PHASE_LABEL[phase] ?? phase.toUpperCase();
 
-  const btn = (
-    text: string,
-    action_id: string,
-    value_phase: string
-  ) => ({
+  // Step completion markers shown as text above buttons
+  const step1done = phase === "identified" || phase === "monitoring" || phase === "resolved";
+  const step2done = phase === "monitoring" || phase === "resolved";
+
+  const stepLine = [
+    step1done ? "✅ ~~Step 1: Root Cause~~" : "⬜ Step 1: Root Cause Identified",
+    step2done ? "✅ ~~Step 2: Fix In Progress~~" : "⬜ Step 2: Fix In Progress",
+    "⬜ Step 3: Resolved",
+  ].join("  →  ");
+
+  // Guide text tells IC exactly what to click next
+  const guide: Record<string, string> = {
+    investigating: "👇 *Bắt đầu từ Step 1* — click khi đã xác định được nguyên nhân",
+    identified:    "👇 *Tiếp theo Step 2* — click khi đã bắt đầu fix",
+    monitoring:    "👇 *Cuối cùng Step 3* — click khi incident đã hoàn toàn resolved",
+  };
+
+  // Next-step button is primary (green); others are default (gray)
+  const nextStep: Record<string, string> = {
+    investigating: "identified",
+    identified:    "monitoring",
+    monitoring:    "resolved",
+  };
+  const highlighted = nextStep[phase] ?? "";
+
+  const btn = (text: string, action_id: string, value_phase: string) => ({
     type: "button",
     text: { type: "plain_text", text, emoji: true },
     value: incident_id,
     action_id,
-    ...(value_phase === phase ? { style: "primary" } : {}),
+    ...(value_phase === highlighted ? { style: "primary" } : {}),
   });
 
   return [
@@ -147,16 +170,20 @@ export function build_status_buttons(incident_id: string, phase: string): object
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*Incident \`${incident_id}\`* — Status: *${label}*`,
+        text: `*Incident \`${incident_id}\`* — ${label}\n${stepLine}`,
       },
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: guide[phase] ?? "" },
     },
     {
       type: "actions",
       block_id: `status_${incident_id}_${Date.now()}`,
       elements: [
-        btn("🔍 Root Cause Identified", "incident_identified", "identified"),
-        btn("🔧 Fix In Progress",       "incident_monitoring", "monitoring"),
-        btn("✅ Resolved",              "incident_resolved",   "resolved"),
+        btn("🔍 1. Root Cause Identified", "incident_identified", "identified"),
+        btn("🔧 2. Fix In Progress",        "incident_monitoring", "monitoring"),
+        btn("✅ 3. Resolved",               "incident_resolved",   "resolved"),
       ],
     },
   ];

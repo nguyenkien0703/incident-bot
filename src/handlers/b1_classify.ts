@@ -200,7 +200,7 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     ping_count: 0,
     timeline: [
       { time: input.start_time, event: "Incident detected", actor: "system" },
-      { time: now, event: `Classified as ${priority} (${input.type})`, actor: input.ic_name },
+      { time: now, event: `Classified as ${priority} (${input.type})`, actor: contacts.find((c) => c.slack_id === input.ic_slack_id)?.name ?? input.ic_slack_id },
     ],
   };
 
