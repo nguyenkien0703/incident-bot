@@ -1,20 +1,19 @@
 /**
- * B5 — PREVENTION (AI-Driven)
+ * B5 — PREVENTION (AI-Driven via OpenRouter)
  *
- * Uses Claude to:
+ * Calls OpenRouter (OpenAI-compatible API) to:
  *  1. Write a 2-3 sentence incident summary
- *  2. Propose 3-5 concrete prevention actions with suggested owner role + ETA
+ *  2. Propose 3-5 concrete prevention actions with suggested owner + ETA
  *
- * The bot posts the proposals to Slack. IC/IT team confirms/adjusts
- * owner + ETA per item by replying in the thread.
+ * Model: google/gemini-2.0-flash-lite  (cheap + fast, good for structured JSON)
+ * Swap to any model at OPENROUTER_MODEL env var.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import type { IncidentData } from "./b4_report";
 
 export interface PreventionAction {
   action: string;
-  suggested_owner: string; // DevOps | TechLead | PM | QA | CEO
+  suggested_owner: string; // DevOps | TechLead | PM | QA
   suggested_eta: string;   // 3 days | 1 week | 2 weeks | 1 month
 }
 
@@ -22,6 +21,8 @@ export interface B5Analysis {
   summary: string;
   actions: PreventionAction[];
 }
+
+const DEFAULT_MODEL = "google/gemini-2.0-flash-lite";
 
 export async function generate_b5_analysis(
   api_key: string,
@@ -31,7 +32,7 @@ export async function generate_b5_analysis(
     ic_display_name?: string;
   }
 ): Promise<B5Analysis> {
-  const client = new Anthropic({ apiKey: api_key });
+  const model = process.env.OPENROUTER_MODEL ?? DEFAULT_MODEL;
 
   const timeline_text = incident.timeline
     .map((e) => `  ${e.time}: ${e.event}`)
@@ -60,7 +61,7 @@ Tasks:
    - suggested_owner: one of DevOps | TechLead | PM | QA
    - suggested_eta: one of 3 days | 1 week | 2 weeks | 1 month
 
-Return ONLY valid JSON in this exact shape:
+Return ONLY valid JSON in this exact shape (no markdown, no extra text):
 {
   "summary": "...",
   "actions": [
@@ -68,15 +69,31 @@ Return ONLY valid JSON in this exact shape:
   ]
 }`;
 
-  const msg = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 1024,
-    messages: [{ role: "user", content: prompt }],
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${api_key}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://github.com/DefikitTeam/incident-response-bot",
+      "X-Title": "Incident Response Bot",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [{ role: "user", content: prompt }],
+    }),
   });
 
-  const raw = (msg.content[0] as { type: string; text: string }).text.trim();
+  if (!res.ok) {
+    throw new Error(`${res.status} ${await res.text()}`);
+  }
 
-  // Strip markdown code fences if present
+  const data = (await res.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+
+  const raw = data.choices[0]?.message?.content?.trim() ?? "";
+  // Strip markdown code fences if model wraps in ```json ... ```
   const json = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
   return JSON.parse(json) as B5Analysis;

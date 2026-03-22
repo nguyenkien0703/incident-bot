@@ -48,8 +48,8 @@ export async function handle_b4(env: Env, incident: IncidentData): Promise<B4Res
 
   // AI analysis: generate summary + prevention actions
   const ic_display_name = incident.ic_display_name ?? incident.ic;
-  const b5 = env.ANTHROPIC_API_KEY
-    ? await generate_b5_analysis(env.ANTHROPIC_API_KEY, {
+  const b5 = env.OPENROUTER_API_KEY
+    ? await generate_b5_analysis(env.OPENROUTER_API_KEY, {
         ...incident,
         ic_display_name,
       }).catch((err) => {

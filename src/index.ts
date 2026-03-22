@@ -50,8 +50,8 @@ export interface Env {
   GITHUB_REPO_OWNER: string;
   GITHUB_REPO_NAME: string;
 
-  // Anthropic
-  ANTHROPIC_API_KEY: string;
+  // OpenRouter (AI — supports any model via OpenAI-compatible API)
+  OPENROUTER_API_KEY: string;
 
   // PostgreSQL pool (injected at startup)
   db: Pool;
@@ -86,7 +86,7 @@ function buildEnv(): Env {
     GITHUB_TOKEN: process.env.GITHUB_TOKEN!,
     GITHUB_REPO_OWNER: process.env.GITHUB_REPO_OWNER!,
     GITHUB_REPO_NAME: process.env.GITHUB_REPO_NAME!,
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? "",
     db,
   };
 }
