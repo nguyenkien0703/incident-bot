@@ -70,7 +70,9 @@ export function slack_tag_group(group_name: string): string {
 }
 
 /**
- * Post a Block Kit message in a thread. Returns the new message ts.
+ * Post a Block Kit message in a thread.
+ * Returns { ts, channel } — channel is the real channel ID from Slack's response,
+ * which is needed for chat.update (channel name alone won't work there).
  */
 export async function slack_reply_blocks(
   channel: string,
@@ -78,13 +80,16 @@ export async function slack_reply_blocks(
   blocks: object[],
   text: string,
   token: string
-): Promise<string> {
+): Promise<{ ts: string; channel: string }> {
   const data = await slackApi(
     "chat.postMessage",
     { channel, thread_ts, blocks, text },
     token
   );
-  return (data.ts as string) ?? "";
+  return {
+    ts: (data.ts as string) ?? "",
+    channel: (data.channel as string) ?? channel,
+  };
 }
 
 /**

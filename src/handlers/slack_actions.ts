@@ -90,8 +90,10 @@ export interface ViewSubmissionPayload {
 /** Refresh the B5 message in-place after any item change */
 async function refresh_b5(env: Env, inc: NonNullable<ReturnType<typeof get_active_incident>>): Promise<void> {
   if (!inc.b5_items || !inc.b5_message_ts) return;
+  // Use b5_channel (real channel ID from Slack API response) — chat.update requires channel ID, not name
+  const channel = inc.b5_channel ?? inc.slack_channel;
   await slack_update_message(
-    inc.slack_channel,
+    channel,
     inc.b5_message_ts,
     build_b5_blocks(inc.incident_id, inc.b5_items),
     `B5 Prevention Plan — ${inc.incident_id}`,
@@ -344,7 +346,7 @@ export async function handle_slack_action(
         status: "pending" as const,
       }));
 
-      const b5_ts = await slack_reply_blocks(
+      const b5_posted = await slack_reply_blocks(
         inc.slack_channel,
         inc.slack_thread_ts,
         build_b5_blocks(inc.incident_id, inc.b5_items),
@@ -352,11 +354,12 @@ export async function handle_slack_action(
         env.SLACK_BOT_TOKEN
       ).catch((err) => {
         console.error("[b5] post blocks failed:", err.message);
-        return "";
+        return { ts: "", channel: "" };
       });
 
-      console.log(`[b5] posted blocks for ${inc.incident_id}, ts=${b5_ts}`);
-      inc.b5_message_ts = b5_ts || undefined;
+      console.log(`[b5] posted blocks for ${inc.incident_id}, ts=${b5_posted.ts} channel=${b5_posted.channel}`);
+      inc.b5_message_ts = b5_posted.ts || undefined;
+      inc.b5_channel = b5_posted.channel || undefined;
     } else {
       // No AI proposals — close immediately
       resolve_active_incident(incident_id);

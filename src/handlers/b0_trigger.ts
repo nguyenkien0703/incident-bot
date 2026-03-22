@@ -25,13 +25,19 @@ export async function handle_b0(
   if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
     await status_page_update(
       "investigating",
-      "🔵 We are investigating a potential issue. Our team is checking.",
+      `🔴 [INVESTIGATING] We are investigating a reported issue. Our team is checking urgently.`,
       {
         STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
         STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
         STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
       }
-    ).catch((err) => console.warn("[b0] statuspage skipped:", err.message));
+    ).catch((err) => console.error("[b0] statuspage FAILED:", err.message));
+  } else {
+    console.warn("[b0] statuspage skipped — missing env vars:", {
+      hasKey: !!env.STATUSPAGE_API_KEY,
+      hasPage: !!env.STATUSPAGE_PAGE_ID,
+      hasComponent: !!env.STATUSPAGE_COMPONENT_ID,
+    });
   }
 
   // 2. Create Slack thread in #incidents (or reply in IC's channel)

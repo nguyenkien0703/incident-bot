@@ -43,6 +43,8 @@ export interface ActiveIncident {
   report_file_path?: string;
   /** ts of the B5 interactive message (for in-place updates when buttons are clicked) */
   b5_message_ts?: string;
+  /** Actual channel ID of the B5 message (from Slack API response — needed for chat.update) */
+  b5_channel?: string;
   /** Per-item B5 state — each item can be confirmed, adjusted, or removed */
   b5_items?: Array<{
     action: string;
