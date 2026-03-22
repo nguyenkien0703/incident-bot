@@ -107,10 +107,18 @@ async function finalize_b5(env: Env, inc: NonNullable<ReturnType<typeof get_acti
   console.log(`[b5] finalize_b5 triggered for ${inc.incident_id}`);
   const kept = (inc.b5_items ?? []).filter((i) => i.status !== "removed");
 
+  // Resolve any Slack mention format (<@USERID>) to a real name for the GitHub report
+  const contacts = await get_team_contacts(env.db).catch(() => []);
+  const resolveOwner = (owner: string): string => {
+    const match = owner.match(/^<@([A-Z0-9]+)>$/);
+    if (!match) return owner;
+    return contacts.find((c) => c.slack_id === match[1])?.name ?? match[1];
+  };
+
   const action_items_md = kept.length > 0
     ? kept.map((item, i) =>
-        `${i + 1}. **${item.action}**\n   - Owner: ${item.owner}\n   - ETA: ${item.eta}`
-      ).join("\n")
+        `${i + 1}. **${item.action}**\n   - Owner: ${resolveOwner(item.owner)}\n   - ETA: ${item.eta}`
+      ).join("\n\n")
     : "_No action items recorded._";
 
   let closeMsg = `✅ *Incident \`${inc.incident_id}\` fully closed.*`;

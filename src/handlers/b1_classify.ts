@@ -216,8 +216,8 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
   ).catch((err) => console.error("[b1] status buttons failed:", err.message));
 
   // Start 15-minute proactive ping timer (stops automatically after 20 pings = 5h)
-  // const PING_INTERVAL_MS = 15 * 60 * 1000;
-  const PING_INTERVAL_MS =  10 * 1000;
+  const PING_INTERVAL_MS = 3 * 60 * 1000;
+  // const PING_INTERVAL_MS =  10 * 1000;
   activeInc.ping_timer = setInterval(async () => {
     if (activeInc.phase === "resolved") {
       clearInterval(activeInc.ping_timer);
