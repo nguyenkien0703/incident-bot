@@ -167,9 +167,10 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     })
   );
 
-  // 3. Update status page (best-effort)
+  // 3. Update status page (best-effort) — capture incident ID for later updates
+  let statuspage_incident_id: string | undefined;
   if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
-    await status_page_update(
+    statuspage_incident_id = await status_page_update(
       "investigating",
       `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
       {
@@ -177,7 +178,7 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
         STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
         STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
       }
-    ).catch((err) => console.warn("[b1] statuspage skipped:", err.message));
+    ).catch((err) => { console.warn("[b1] statuspage skipped:", err.message); return undefined; });
   }
 
   // 4. Register active incident + post interactive status buttons
@@ -198,6 +199,7 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     phase: "investigating",
     awaiting: null,
     ping_count: 0,
+    statuspage_incident_id,
     timeline: [
       { time: input.start_time, event: "Incident detected", actor: "system" },
       { time: now, event: `Classified as ${priority} (${input.type})`, actor: contacts.find((c) => c.slack_id === input.ic_slack_id)?.name ?? input.ic_slack_id },

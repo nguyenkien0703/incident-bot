@@ -47,6 +47,7 @@ import {
 import { handle_b1 } from "./b1_classify";
 import { handle_b4, type B4Result } from "./b4_report";
 import { update_action_items } from "../tools/github";
+import { status_page_update } from "../tools/statuspage";
 import { get_current_time } from "../utils/time";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -100,6 +101,7 @@ async function refresh_b5(env: Env, inc: NonNullable<ReturnType<typeof get_activ
 
 /** Called when all items are confirmed or removed — writes final report and closes incident */
 async function finalize_b5(env: Env, inc: NonNullable<ReturnType<typeof get_active_incident>>): Promise<void> {
+  console.log(`[b5] finalize_b5 triggered for ${inc.incident_id}`);
   const kept = (inc.b5_items ?? []).filter((i) => i.status !== "removed");
 
   const action_items_md = kept.length > 0
@@ -129,6 +131,7 @@ async function finalize_b5(env: Env, inc: NonNullable<ReturnType<typeof get_acti
     env.SLACK_BOT_TOKEN
   ).catch(console.error);
 
+  console.log(`[b5] incident ${inc.incident_id} fully resolved`);
   resolve_active_incident(inc.incident_id);
 }
 
@@ -175,12 +178,14 @@ export async function handle_slack_action(
       item.status = "confirmed";
       await refresh_b5(env, inc);
       const allDone = inc.b5_items.every((i) => i.status !== "pending");
+      console.log(`[b5] confirm item ${idx} for ${incident_id} — allDone=${allDone} statuses=[${inc.b5_items.map((i) => i.status).join(",")}]`);
       if (allDone) await finalize_b5(env, inc);
 
     } else if (action.action_id === "b5_remove") {
       item.status = "removed";
       await refresh_b5(env, inc);
       const allDone = inc.b5_items.every((i) => i.status !== "pending");
+      console.log(`[b5] remove item ${idx} for ${incident_id} — allDone=${allDone} statuses=[${inc.b5_items.map((i) => i.status).join(",")}]`);
       if (allDone) await finalize_b5(env, inc);
 
     } else if (action.action_id === "b5_owner") {
@@ -232,6 +237,18 @@ export async function handle_slack_action(
         build_root_cause_modal(incident_id),
         env.SLACK_BOT_TOKEN
       ).catch(console.error),
+      env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID
+        ? status_page_update(
+            "identified",
+            `🟡 [ROOT CAUSE IDENTIFIED] ${now} — Our team has identified the root cause and is working on a fix. Next update within 15 minutes.`,
+            {
+              STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+              STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+              STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+              STATUSPAGE_INCIDENT_ID: inc.statuspage_incident_id,
+            }
+          ).then((id) => { inc.statuspage_incident_id = id; }).catch((err) => console.warn("[actions] statuspage identified skipped:", err.message))
+        : Promise.resolve(),
     ]);
   }
 
@@ -254,6 +271,18 @@ export async function handle_slack_action(
         build_fix_modal(incident_id),
         env.SLACK_BOT_TOKEN
       ).catch(console.error),
+      env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID
+        ? status_page_update(
+            "monitoring",
+            `🟠 [FIX IN PROGRESS] ${now} — A fix has been implemented and we are monitoring the situation. Next update within 15 minutes.`,
+            {
+              STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+              STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+              STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+              STATUSPAGE_INCIDENT_ID: inc.statuspage_incident_id,
+            }
+          ).then((id) => { inc.statuspage_incident_id = id; }).catch((err) => console.warn("[actions] statuspage monitoring skipped:", err.message))
+        : Promise.resolve(),
     ]);
   }
 
@@ -292,6 +321,7 @@ export async function handle_slack_action(
       root_cause: inc.root_cause,
       fix_description: inc.fix_description,
       timeline: inc.timeline,
+      statuspage_incident_id: inc.statuspage_incident_id,
     }).catch(async (err) => {
       console.error("[actions] B4 error:", err.message);
       await slack_reply_to_thread(
@@ -325,6 +355,7 @@ export async function handle_slack_action(
         return "";
       });
 
+      console.log(`[b5] posted blocks for ${inc.incident_id}, ts=${b5_ts}`);
       inc.b5_message_ts = b5_ts || undefined;
     } else {
       // No AI proposals — close immediately

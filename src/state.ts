@@ -37,6 +37,8 @@ export interface ActiveIncident {
   ping_count: number;
   timeline: { time: string; event: string; actor: string }[];
   ping_timer?: ReturnType<typeof setInterval>;
+  /** Statuspage.io incident ID (created in B1, updated in B4) */
+  statuspage_incident_id?: string;
   /** Path of the post-mortem file written by B4 */
   report_file_path?: string;
   /** ts of the B5 interactive message (for in-place updates when buttons are clicked) */
