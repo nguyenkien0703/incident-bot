@@ -191,6 +191,7 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     priority,
     ic_slack_id: input.ic_slack_id,
     ic_name: input.ic_name,
+    ic_display_name: contacts.find((c) => c.slack_id === input.ic_slack_id)?.name ?? input.ic_slack_id,
     users_affected: input.users_affected,
     payment_affected: input.impact.payment_affected,
     data_integrity_affected: input.impact.data_integrity_affected,

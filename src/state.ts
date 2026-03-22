@@ -20,7 +20,8 @@ export interface ActiveIncident {
   type: string;
   priority: string;
   ic_slack_id: string;
-  ic_name: string;
+  ic_name: string;       // Slack mention: <@UXXXXXXX>
+  ic_display_name: string; // Human-readable name: Nguyen Van Kien
   users_affected: number;
   payment_affected: boolean;
   data_integrity_affected: boolean;
@@ -38,8 +39,13 @@ export interface ActiveIncident {
   ping_timer?: ReturnType<typeof setInterval>;
   /** Path of the post-mortem file written by B4 (used by B5 to update action items) */
   report_file_path?: string;
-  /** True while waiting for IC to reply with B5 action items in thread */
+  /**
+   * True while waiting for IC to confirm AI-suggested B5 action items.
+   * When set, the next thread reply captures owner/ETA confirmations.
+   */
   awaiting_b5?: boolean;
+  /** AI-generated prevention proposals, stored so IC can confirm them */
+  b5_proposals?: Array<{ action: string; suggested_owner: string; suggested_eta: string }>;
 }
 
 // ── Pending incidents (B0 → B1) ─────────────────────────────────────────────

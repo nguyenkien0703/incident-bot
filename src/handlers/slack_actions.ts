@@ -181,13 +181,14 @@ export async function handle_slack_action(
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
 
-    // Run B4: write post-mortem to GitHub + update statuspage
+    // Run B4: write post-mortem to GitHub + update statuspage + AI analysis
     const b4: B4Result | null = await handle_b4(env, {
       incident_id: inc.incident_id,
       start_time: inc.start_time,
       type: inc.type,
       priority: inc.priority,
       ic: inc.ic_name,
+      ic_display_name: inc.ic_display_name,
       slack_thread_ts: inc.slack_thread_ts,
       users_affected: inc.users_affected,
       payment_affected: inc.payment_affected,
@@ -206,28 +207,47 @@ export async function handle_slack_action(
       return null;
     });
 
-    // B5: ask IC for action items via thread reply (they'll type a list)
-    // Keep incident in active map with awaiting_b5 = true so index.ts can capture the reply
+    // Store file path for B5 update
     inc.report_file_path = b4?.filePath;
-    inc.awaiting_b5 = true;
 
-    const b5msg = [
-      `📋 *B5 — Action Items (Prevention)*`,
-      b4 ? `Post-mortem: ${b4.fileUrl}` : "",
-      ``,
-      `${actor} please reply in this thread with action items to prevent recurrence.`,
-      `Format: one item per line starting with \`-\`\nExample:\n- Add circuit breaker to payment service\n- Lower alert threshold to 1% error rate`,
-    ].filter(Boolean).join("\n");
+    // B5: Post AI-proposed prevention actions to Slack
+    // IC/IT team replies to confirm owner + ETA per item
+    if (b4 && b4.b5_actions.length > 0) {
+      inc.b5_proposals = b4.b5_actions;
+      inc.awaiting_b5 = true;
 
-    await slack_reply_to_thread(
-      inc.slack_channel,
-      inc.slack_thread_ts,
-      b5msg,
-      env.SLACK_BOT_TOKEN
-    ).catch(console.error);
+      const actionsText = b4.b5_actions
+        .map(
+          (a, i) =>
+            `*${i + 1}. ${a.action}*\n   • Suggested owner: *${a.suggested_owner}*  |  ETA: *${a.suggested_eta}*`
+        )
+        .join("\n\n");
 
-    // NOTE: resolve_active_incident is NOT called here.
-    // index.ts will call it after capturing the B5 thread reply.
+      const b5msg = [
+        `📋 *B5 — AI Prevention Plan*`,
+        `Post-mortem: ${b4.fileUrl}`,
+        ``,
+        `🤖 Based on root cause analysis, the AI proposes:`,
+        ``,
+        actionsText,
+        ``,
+        `${actor} please reply to *confirm or adjust* each item.`,
+        `Format: \`1: @owner, 1 week / 2: @devops, 3 days / 3: confirmed\``,
+        `Or reply \`confirmed\` to accept all as-is.`,
+      ].join("\n");
+
+      await slack_reply_to_thread(
+        inc.slack_channel,
+        inc.slack_thread_ts,
+        b5msg,
+        env.SLACK_BOT_TOKEN
+      ).catch(console.error);
+    } else {
+      // No AI proposals (API key missing or no actions generated) — close immediately
+      resolve_active_incident(incident_id);
+    }
+
+    // NOTE: resolve_active_incident is called by index.ts after IC confirms B5.
   }
 }
 
