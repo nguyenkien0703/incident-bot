@@ -34,7 +34,7 @@ import {
   build_fix_modal,
 } from "../tools/slack_blocks";
 import { handle_b1 } from "./b1_classify";
-import { handle_b4 } from "./b4_report";
+import { handle_b4, type B4Result } from "./b4_report";
 import { get_current_time } from "../utils/time";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -181,8 +181,8 @@ export async function handle_slack_action(
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
 
-    // Run B4: post-mortem to GitHub + update statuspage
-    const reportUrl = await handle_b4(env, {
+    // Run B4: write post-mortem to GitHub + update statuspage
+    const b4: B4Result | null = await handle_b4(env, {
       incident_id: inc.incident_id,
       start_time: inc.start_time,
       type: inc.type,
@@ -192,6 +192,8 @@ export async function handle_slack_action(
       users_affected: inc.users_affected,
       payment_affected: inc.payment_affected,
       data_integrity_affected: inc.data_integrity_affected,
+      root_cause: inc.root_cause,
+      fix_description: inc.fix_description,
       timeline: inc.timeline,
     }).catch(async (err) => {
       console.error("[actions] B4 error:", err.message);
@@ -204,13 +206,17 @@ export async function handle_slack_action(
       return null;
     });
 
-    // B5: ask IC for action items
+    // B5: ask IC for action items via thread reply (they'll type a list)
+    // Keep incident in active map with awaiting_b5 = true so index.ts can capture the reply
+    inc.report_file_path = b4?.filePath;
+    inc.awaiting_b5 = true;
+
     const b5msg = [
       `📋 *B5 — Action Items (Prevention)*`,
-      reportUrl ? `Post-mortem: ${reportUrl}` : "",
+      b4 ? `Post-mortem: ${b4.fileUrl}` : "",
       ``,
-      `${actor} vui lòng reply trong thread này với action items để ngăn sự cố tái diễn.`,
-      `Format: mỗi item một dòng, bắt đầu bằng \`-\``,
+      `${actor} please reply in this thread with action items to prevent recurrence.`,
+      `Format: one item per line starting with \`-\`\nExample:\n- Add circuit breaker to payment service\n- Lower alert threshold to 1% error rate`,
     ].filter(Boolean).join("\n");
 
     await slack_reply_to_thread(
@@ -220,7 +226,8 @@ export async function handle_slack_action(
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
 
-    resolve_active_incident(incident_id);
+    // NOTE: resolve_active_incident is NOT called here.
+    // index.ts will call it after capturing the B5 thread reply.
   }
 }
 

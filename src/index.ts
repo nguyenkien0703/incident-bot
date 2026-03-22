@@ -7,7 +7,9 @@ import {
   register_incident,
   should_trigger_incident,
   get_active_by_thread,
+  resolve_active_incident,
 } from "./state";
+import { update_action_items } from "./tools/github";
 import {
   handle_slack_action,
   handle_view_submission,
@@ -239,12 +241,43 @@ async function start() {
 
     const user_slack_id = (event.user as string) ?? "unknown";
 
-    // B1 classification now happens via modal (incident_classify_open → classify_incident view).
-    // Thread replies to active incidents are ignored here — modals handle root_cause and fix_description.
-    // We only log for debugging.
+    // Check if there's an active incident awaiting B5 action items from IC
     const activeInc = get_active_by_thread(thread_ts!);
+    if (activeInc && activeInc.awaiting_b5) {
+      activeInc.awaiting_b5 = false;
+
+      // Update the GitHub report file with the action items
+      if (activeInc.report_file_path && env.GITHUB_TOKEN) {
+        update_action_items(activeInc.report_file_path, text, {
+          GITHUB_TOKEN: env.GITHUB_TOKEN,
+          GITHUB_REPO_OWNER: env.GITHUB_REPO_OWNER,
+          GITHUB_REPO_NAME: env.GITHUB_REPO_NAME,
+        })
+          .then((url) =>
+            slack_reply_to_thread(
+              env.SLACK_INCIDENTS_CHANNEL,
+              thread_ts!,
+              `✅ Action items recorded and post-mortem updated: ${url}`,
+              env.SLACK_BOT_TOKEN
+            )
+          )
+          .catch((err) => console.error("[b5] update failed:", err.message));
+      } else {
+        await slack_reply_to_thread(
+          env.SLACK_INCIDENTS_CHANNEL,
+          thread_ts!,
+          `✅ Action items recorded. Incident ${activeInc.incident_id} is now fully closed.`,
+          env.SLACK_BOT_TOKEN
+        ).catch(console.error);
+      }
+
+      // Fully close the incident
+      resolve_active_incident(activeInc.incident_id);
+      return;
+    }
+
     if (activeInc) {
-      console.log(`[events] thread reply ignored for active incident ${activeInc.incident_id} — use buttons`);
+      console.log(`[events] thread reply ignored for incident ${activeInc.incident_id} — awaiting_b5=false`);
     }
   });
 

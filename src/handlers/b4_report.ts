@@ -1,6 +1,9 @@
 /**
  * B4 — INCIDENT REPORT
- * Triggered when IC confirms all close criteria are met.
+ * Triggered when IC clicks "Resolved".
+ * 1. Write post-mortem markdown to GitHub (branch: Kien_test_incident_report)
+ * 2. Post resolved message to Slack thread
+ * 3. Update statuspage to resolved
  */
 
 import { get_current_time, format_duration } from "../utils/time";
@@ -21,10 +24,17 @@ export interface IncidentData {
   users_affected?: number;
   payment_affected?: boolean;
   data_integrity_affected?: boolean;
+  root_cause?: string;
+  fix_description?: string;
   timeline: { time: string; event: string; actor: string }[];
 }
 
-export async function handle_b4(env: Env, incident: IncidentData): Promise<string> {
+export interface B4Result {
+  fileUrl: string;
+  filePath: string;
+}
+
+export async function handle_b4(env: Env, incident: IncidentData): Promise<B4Result> {
   const end_time = get_current_time();
   const duration = format_duration(incident.start_time, end_time);
 
@@ -57,11 +67,11 @@ ${timeline_md}
 
 ## Root Cause
 
-<!-- Root cause description -->
+${incident.root_cause ?? "<!-- To be filled by IC -->"}
 
 ## Resolution
 
-<!-- What was done: rollback / hotfix / feature flag -->
+${incident.fix_description ?? "<!-- What was done: rollback / hotfix / feature flag -->"}
 
 ## Business Impact
 
@@ -88,7 +98,7 @@ Duration: ${duration}
 IC: ${incident.ic}
 Incident Report: ${fileUrl}
 
-Next step: See B5 prevention plan coming up.`;
+Next step: B5 — please reply with action items to prevent recurrence.`;
 
   await slack_reply_to_thread(
     env.SLACK_INCIDENTS_CHANNEL,
@@ -97,17 +107,19 @@ Next step: See B5 prevention plan coming up.`;
     env.SLACK_BOT_TOKEN
   );
 
-  // Update status page
-  await status_page_update(
-    "resolved",
-    `✅ [RESOLVED] ${end_time} — The incident has been fully resolved. Service is operating normally.`,
-    {
-      STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
-      STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
-      STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
-      STATUSPAGE_INCIDENT_ID: incident.statuspage_incident_id ?? undefined,
-    }
-  );
+  // Update status page (best-effort)
+  if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
+    await status_page_update(
+      "resolved",
+      `✅ [RESOLVED] ${end_time} — The incident has been fully resolved. Service is operating normally.`,
+      {
+        STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
+        STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
+        STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
+        STATUSPAGE_INCIDENT_ID: incident.statuspage_incident_id ?? undefined,
+      }
+    ).catch((err) => console.warn("[b4] statuspage skipped:", err.message));
+  }
 
-  return fileUrl;
+  return { fileUrl, filePath };
 }

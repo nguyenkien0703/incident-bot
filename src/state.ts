@@ -36,6 +36,10 @@ export interface ActiveIncident {
   ping_count: number;
   timeline: { time: string; event: string; actor: string }[];
   ping_timer?: ReturnType<typeof setInterval>;
+  /** Path of the post-mortem file written by B4 (used by B5 to update action items) */
+  report_file_path?: string;
+  /** True while waiting for IC to reply with B5 action items in thread */
+  awaiting_b5?: boolean;
 }
 
 // ── Pending incidents (B0 → B1) ─────────────────────────────────────────────
