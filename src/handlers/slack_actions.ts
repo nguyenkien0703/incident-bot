@@ -48,6 +48,7 @@ import { handle_b1 } from "./b1_classify";
 import { handle_b4, type B4Result } from "./b4_report";
 import { update_action_items } from "../tools/github";
 import { status_page_update } from "../tools/statuspage";
+import { get_team_contacts } from "../utils/contacts";
 import { get_current_time } from "../utils/time";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -463,8 +464,10 @@ export async function handle_view_submission(
     const selected_user = vals.owner_block?.owner_user?.selected_user;
     if (!selected_user) return;
 
-    // Resolve user ID → display name
-    const display = await slack_get_user_name(selected_user, env.SLACK_BOT_TOKEN);
+    // Resolve user ID → display name: try team contacts DB first, then Slack API
+    const contacts = await get_team_contacts(env.db).catch(() => []);
+    const contact = contacts.find((c) => c.slack_id === selected_user);
+    const display = contact?.name ?? await slack_get_user_name(selected_user, env.SLACK_BOT_TOKEN);
     inc.b5_items[idx].owner = display;
 
     await refresh_b5(env, inc);

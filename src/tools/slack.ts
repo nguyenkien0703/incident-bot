@@ -100,7 +100,8 @@ export async function slack_get_user_name(user_id: string, token: string): Promi
     const data = await slackApi("users.info", { user: user_id }, token);
     const profile = ((data.user as Record<string, unknown>).profile as Record<string, unknown>);
     return (profile.display_name as string || profile.real_name as string) || user_id;
-  } catch {
+  } catch (err) {
+    console.warn(`[slack] users.info failed for ${user_id}:`, (err as Error).message);
     return user_id;
   }
 }

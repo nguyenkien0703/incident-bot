@@ -136,10 +136,12 @@ export async function update_action_items(
   const existing = (await getRes.json()) as { sha: string; content: string };
   const currentContent = decodeURIComponent(escape(atob(existing.content.replace(/\n/g, ""))));
 
-  // Replace the placeholder section
+  // Replace the entire Action Items section (from header to end of file).
+  // This works whether B4 wrote AI-generated content or a placeholder — action items
+  // are always the last section in the report.
   const updated = currentContent.replace(
-    /## Action Items \(Prevention\)\n\n<!-- To be filled in B5 -->/,
-    `## Action Items (Prevention)\n\n${action_items}`
+    /## Action Items \(Prevention\)[\s\S]*/,
+    `## Action Items (Prevention)\n\n${action_items}\n`
   );
 
   const body = {
