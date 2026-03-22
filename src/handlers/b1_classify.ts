@@ -20,7 +20,6 @@ import {
   slack_reply_to_thread,
   slack_post_message,
   slack_tag_user,
-  slack_open_dm,
   slack_reply_blocks,
 } from "../tools/slack";
 import { build_status_buttons } from "../tools/slack_blocks";
@@ -136,20 +135,10 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
 
   await Promise.all(
     uniqueNotify.map(async (contact) => {
-      // Build huddle link for this user's DM channel with the bot
-      let huddleLink = "";
-      if (env.SLACK_TEAM_ID) {
-        const dmChannelId = await slack_open_dm(contact.slack_id, env.SLACK_BOT_TOKEN).catch(() => "");
-        if (dmChannelId) {
-          huddleLink = `https://app.slack.com/huddle/${env.SLACK_TEAM_ID}/${dmChannelId}`;
-        }
-      }
-
       const dm = [
         `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*`,
         `Description: ${input.description}`,
         `Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`,
-        huddleLink ? `📞 *Join Huddle ngay:* ${huddleLink}` : "",
         meetLink ? `📹 *War Room (Meet):* ${meetLink}` : "",
       ].filter(Boolean).join("\n");
 

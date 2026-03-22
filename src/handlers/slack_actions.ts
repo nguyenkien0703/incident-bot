@@ -1,31 +1,77 @@
 /**
- * Slack interactive actions handler
- * Triggered when IC clicks a button in a Block Kit message.
+ * Slack interactive actions + modal submissions handler.
  *
- * Supported action_ids:
- *   incident_identified  → phase: identifying → ask for root cause in thread
- *   incident_monitoring  → phase: monitoring  → ask for fix description in thread
- *   incident_resolved    → run B4 (post-mortem + statuspage) + B5 prompt
+ * Block action flow:
+ *   incident_classify_open  → open classify modal (B1)
+ *   incident_identified     → update buttons (highlight), open root cause modal
+ *   incident_monitoring     → update buttons (highlight), open fix modal
+ *   incident_resolved       → run B4 + B5 prompt
+ *
+ * View submission flow:
+ *   classify_incident       → parse fields → run B1
+ *   root_cause_submit       → save root cause, confirm in thread
+ *   fix_description_submit  → save fix description, confirm in thread
  */
 
 import type { Env } from "../index";
-import { get_active_incident, resolve_active_incident } from "../state";
+import type { BusinessImpact, IncidentType } from "../utils/priority";
+import {
+  get_active_incident,
+  resolve_active_incident,
+  peek_incident,
+  claim_incident,
+} from "../state";
 import {
   slack_reply_to_thread,
   slack_update_message,
+  slack_open_modal,
 } from "../tools/slack";
-import { build_status_buttons, build_resolved_block } from "../tools/slack_blocks";
+import {
+  build_status_buttons,
+  build_resolved_block,
+  build_classify_modal,
+  build_root_cause_modal,
+  build_fix_modal,
+} from "../tools/slack_blocks";
+import { handle_b1 } from "./b1_classify";
 import { handle_b4 } from "./b4_report";
 import { get_current_time } from "../utils/time";
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
 export interface SlackActionPayload {
-  type: string;
+  type: "block_actions";
+  trigger_id: string;
   user: { id: string; name: string };
   channel: { id: string };
-  /** The message that contained the button */
   message: { ts: string; thread_ts?: string };
   actions: Array<{ action_id: string; value: string; block_id?: string }>;
 }
+
+export interface ViewSubmissionPayload {
+  type: "view_submission";
+  user: { id: string; name: string };
+  view: {
+    callback_id: string;
+    private_metadata: string;
+    state: {
+      values: Record<
+        string,
+        Record<
+          string,
+          {
+            type: string;
+            value?: string | null;
+            selected_option?: { value: string } | null;
+            selected_options?: Array<{ value: string }> | null;
+          }
+        >
+      >;
+    };
+  };
+}
+
+// ── Block actions handler ────────────────────────────────────────────────────
 
 export async function handle_slack_action(
   env: Env,
@@ -34,6 +80,33 @@ export async function handle_slack_action(
   const action = payload.actions[0];
   if (!action) return;
 
+  const channel = payload.channel.id;
+  const button_msg_ts = payload.message.ts;
+  const actor = `<@${payload.user.id}>`;
+  const now = get_current_time();
+
+  // ── Open classify modal ─────────────────────────────────────────────────
+  if (action.action_id === "incident_classify_open") {
+    const thread_ts = payload.message.thread_ts ?? payload.message.ts;
+    const inc = peek_incident(thread_ts);
+    if (!inc) {
+      console.warn("[actions] classify clicked but no pending incident for thread:", thread_ts);
+      return;
+    }
+    const metadata = JSON.stringify({
+      incident_id: inc.incident_id,
+      thread_ts: inc.slack_thread_ts,
+      description: inc.description,
+    });
+    await slack_open_modal(
+      payload.trigger_id,
+      build_classify_modal(metadata, inc.description),
+      env.SLACK_BOT_TOKEN
+    ).catch((err) => console.error("[actions] open modal failed:", err.message));
+    return;
+  }
+
+  // All other actions require an active incident
   const incident_id = action.value;
   const inc = get_active_incident(incident_id);
   if (!inc) {
@@ -41,34 +114,27 @@ export async function handle_slack_action(
     return;
   }
 
-  const now = get_current_time();
-  const actor = `<@${payload.user.id}>`;
-  const channel = payload.channel.id;
-  const button_msg_ts = payload.message.ts;
-
   // ── Root Cause Identified ───────────────────────────────────────────────
   if (action.action_id === "incident_identified") {
     if (inc.phase === "resolved") return;
     inc.phase = "identified";
-    inc.awaiting = "root_cause";
-    inc.timeline.push({ time: now, event: "Root cause identified (IC acknowledged)", actor });
+    inc.timeline.push({ time: now, event: "Root cause being identified", actor });
 
     await Promise.all([
-      // Ask IC to type the root cause in the thread
-      slack_reply_to_thread(
-        channel,
-        inc.slack_thread_ts,
-        `🔍 *Root cause identified* — ${actor}\nPlease reply in this thread with a brief root cause description.`,
-        env.SLACK_BOT_TOKEN
-      ).catch(console.error),
-      // Update the button message to reflect the new phase
+      // Update this button message: highlight "Root Cause Identified" button
       slack_update_message(
         channel,
         button_msg_ts,
-        build_status_buttons(incident_id, inc.phase),
+        build_status_buttons(incident_id, "identified"),
         `Incident ${incident_id} — Root Cause Identified`,
         env.SLACK_BOT_TOKEN
       ).catch(console.error),
+      // Open modal to collect root cause text
+      slack_open_modal(
+        payload.trigger_id,
+        build_root_cause_modal(incident_id),
+        env.SLACK_BOT_TOKEN
+      ).catch((err) => console.error("[actions] root cause modal failed:", err.message)),
     ]);
   }
 
@@ -76,23 +142,21 @@ export async function handle_slack_action(
   else if (action.action_id === "incident_monitoring") {
     if (inc.phase === "resolved") return;
     inc.phase = "monitoring";
-    inc.awaiting = "fix_description";
     inc.timeline.push({ time: now, event: "Fix in progress", actor });
 
     await Promise.all([
-      slack_reply_to_thread(
-        channel,
-        inc.slack_thread_ts,
-        `🔧 *Fix in progress* — ${actor}\nPlease reply in this thread with a brief description of the fix / action taken.`,
-        env.SLACK_BOT_TOKEN
-      ).catch(console.error),
       slack_update_message(
         channel,
         button_msg_ts,
-        build_status_buttons(incident_id, inc.phase),
+        build_status_buttons(incident_id, "monitoring"),
         `Incident ${incident_id} — Fix In Progress`,
         env.SLACK_BOT_TOKEN
       ).catch(console.error),
+      slack_open_modal(
+        payload.trigger_id,
+        build_fix_modal(incident_id),
+        env.SLACK_BOT_TOKEN
+      ).catch((err) => console.error("[actions] fix modal failed:", err.message)),
     ]);
   }
 
@@ -108,7 +172,7 @@ export async function handle_slack_action(
       inc.ping_timer = undefined;
     }
 
-    // Replace buttons with a resolved status block
+    // Replace buttons with resolved block
     await slack_update_message(
       channel,
       button_msg_ts,
@@ -117,7 +181,7 @@ export async function handle_slack_action(
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
 
-    // Run B4: write post-mortem to GitHub + update statuspage
+    // Run B4: post-mortem to GitHub + update statuspage
     const reportUrl = await handle_b4(env, {
       incident_id: inc.incident_id,
       start_time: inc.start_time,
@@ -132,7 +196,7 @@ export async function handle_slack_action(
     }).catch(async (err) => {
       console.error("[actions] B4 error:", err.message);
       await slack_reply_to_thread(
-        channel,
+        inc.slack_channel,
         inc.slack_thread_ts,
         `⚠️ Post-mortem report skipped: ${err.message}`,
         env.SLACK_BOT_TOKEN
@@ -140,24 +204,111 @@ export async function handle_slack_action(
       return null;
     });
 
-    // B5: Ask IC for action items (prevention)
+    // B5: ask IC for action items
     const b5msg = [
       `📋 *B5 — Action Items (Prevention)*`,
       reportUrl ? `Post-mortem: ${reportUrl}` : "",
       ``,
-      `${actor} please reply in this thread with action items to prevent recurrence.`,
-      `Format: one item per line starting with \`-\``,
-      `Example:\n- Add circuit breaker to payment service\n- Alert threshold lowered to 1% error rate`,
+      `${actor} vui lòng reply trong thread này với action items để ngăn sự cố tái diễn.`,
+      `Format: mỗi item một dòng, bắt đầu bằng \`-\``,
     ].filter(Boolean).join("\n");
 
     await slack_reply_to_thread(
-      channel,
+      inc.slack_channel,
       inc.slack_thread_ts,
       b5msg,
       env.SLACK_BOT_TOKEN
     ).catch(console.error);
 
-    // Remove from active state (pings stopped, resolution handled)
     resolve_active_incident(incident_id);
+  }
+}
+
+// ── View submission handler ──────────────────────────────────────────────────
+
+export async function handle_view_submission(
+  env: Env,
+  payload: ViewSubmissionPayload
+): Promise<void> {
+  const { callback_id, private_metadata, state } = payload.view;
+  const actor = `<@${payload.user.id}>`;
+  const now = get_current_time();
+  const vals = state.values;
+
+  // ── Classify modal submitted → run B1 ────────────────────────────────
+  if (callback_id === "classify_incident") {
+    const meta = JSON.parse(private_metadata) as {
+      incident_id: string;
+      thread_ts: string;
+      description: string;
+    };
+
+    const pending = claim_incident(meta.thread_ts);
+    if (!pending) {
+      console.warn("[view] classify_incident: incident already claimed or not found");
+      return;
+    }
+
+    const type = vals.type_block?.incident_type?.selected_option?.value as IncidentType;
+    const users_affected = parseInt(vals.users_block?.users_affected?.value ?? "0", 10);
+    const flags = vals.impact_block?.impact_flags?.selected_options?.map((o) => o.value) ?? [];
+    const severity =
+      (vals.severity_block?.severity?.selected_option?.value as BusinessImpact["technical_severity"]) ??
+      "degraded";
+
+    const impact: BusinessImpact = {
+      payment_affected:       flags.includes("payment"),
+      data_integrity_affected: flags.includes("data_integrity"),
+      login_register_broken:  flags.includes("login_register"),
+      enterprise_sla_breach:  flags.includes("sla_breach"),
+      technical_severity:     severity,
+    };
+
+    handle_b1(env, {
+      incident_id: pending.incident_id,
+      start_time:  pending.start_time,
+      slack_thread_ts: pending.slack_thread_ts,
+      description: pending.description,
+      type,
+      ic_slack_id: payload.user.id,
+      ic_name:     `<@${payload.user.id}>`,
+      users_affected,
+      impact,
+    }).catch((err) => console.error("[view] B1 error:", err));
+    return;
+  }
+
+  // ── Root cause modal submitted ────────────────────────────────────────
+  if (callback_id === "root_cause_submit") {
+    const inc = get_active_incident(private_metadata);
+    if (!inc) return;
+    const root_cause = vals.root_cause_block?.root_cause?.value ?? "";
+    inc.root_cause = root_cause;
+    inc.awaiting = null;
+    inc.timeline.push({ time: now, event: `Root cause: ${root_cause}`, actor });
+    await slack_reply_to_thread(
+      inc.slack_channel,
+      inc.slack_thread_ts,
+      `📝 *Root cause recorded* by ${actor}:\n> ${root_cause}`,
+      env.SLACK_BOT_TOKEN
+    ).catch(console.error);
+    return;
+  }
+
+  // ── Fix description modal submitted ────────────────────────────────────
+  if (callback_id === "fix_description_submit") {
+    const inc = get_active_incident(private_metadata);
+    if (!inc) return;
+    const fix_description = vals.fix_block?.fix_description?.value ?? "";
+    inc.fix_description = fix_description;
+    inc.awaiting = null;
+    inc.timeline.push({ time: now, event: `Fix applied: ${fix_description}`, actor });
+    await slack_reply_to_thread(
+      inc.slack_channel,
+      inc.slack_thread_ts,
+      `📝 *Fix recorded* by ${actor}:\n> ${fix_description}`,
+      env.SLACK_BOT_TOKEN
+    ).catch(console.error);
+    return;
   }
 }

@@ -3,15 +3,17 @@ import type { Pool } from "pg";
 import { db } from "./db/client";
 import { seed_contacts } from "./db/seed";
 import { handle_b0 } from "./handlers/b0_trigger";
-import { handle_b1 } from "./handlers/b1_classify";
-import { parse_ic_reply } from "./handlers/slack_events";
 import {
   register_incident,
-  claim_incident,
   should_trigger_incident,
   get_active_by_thread,
 } from "./state";
-import { handle_slack_action, type SlackActionPayload } from "./handlers/slack_actions";
+import {
+  handle_slack_action,
+  handle_view_submission,
+  type SlackActionPayload,
+  type ViewSubmissionPayload,
+} from "./handlers/slack_actions";
 import { slack_reply_to_thread } from "./tools/slack";
 import { get_current_time } from "./utils/time";
 
@@ -160,32 +162,21 @@ async function start() {
     }
   );
 
-  // ── Slack slash command: /incident start <description> ──────────────────
+  // ── Slack slash command: /incident <description> ────────────────────────
   app.post("/slack/slash", async (req, reply) => {
     const body = req.body as Record<string, string>;
-    const text = body.text ?? "";
+    const description = (body.text ?? "").trim() || "Incident reported via slash command";
 
-    if (text.startsWith("start")) {
-      const description =
-        text.replace(/^start\s*/i, "").trim() || "Incident reported via slash command";
-
-      // Respond to Slack immediately (must be within 3s or Slack times out)
-      reply.send({
-        response_type: "ephemeral",
-        text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
-      });
-
-      // Run B0 in background after replying, then register for B1
-      handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
-        .then((result) => register_incident(result))
-        .catch((err) => console.error("[b0] background error:", err));
-      return;
-    }
-
-    return reply.send({
+    // Respond to Slack immediately (must be within 3s or Slack times out)
+    reply.send({
       response_type: "ephemeral",
-      text: "Usage: `/incident start <description>`",
+      text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
     });
+
+    // Run B0 in background then register so IC can click "Classify Incident"
+    handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
+      .then((result) => register_incident(result))
+      .catch((err) => console.error("[b0] background error:", err));
   });
 
   // ── Monitoring alert webhook (Grafana, UptimeRobot, etc.) ───────────────
@@ -248,72 +239,13 @@ async function start() {
 
     const user_slack_id = (event.user as string) ?? "unknown";
 
-    // Sub-role 2a: Active incident awaiting a follow-up response (root cause / fix)
+    // B1 classification now happens via modal (incident_classify_open → classify_incident view).
+    // Thread replies to active incidents are ignored here — modals handle root_cause and fix_description.
+    // We only log for debugging.
     const activeInc = get_active_by_thread(thread_ts!);
-    if (activeInc && activeInc.awaiting) {
-      const now = get_current_time();
-      if (activeInc.awaiting === "root_cause") {
-        activeInc.root_cause = text;
-        activeInc.awaiting = null;
-        activeInc.timeline.push({
-          time: now,
-          event: `Root cause: ${text}`,
-          actor: `<@${user_slack_id}>`,
-        });
-        await slack_reply_to_thread(
-          env.SLACK_INCIDENTS_CHANNEL,
-          thread_ts!,
-          `📝 *Root cause recorded:*\n> ${text}`,
-          env.SLACK_BOT_TOKEN
-        ).catch(console.error);
-      } else if (activeInc.awaiting === "fix_description") {
-        activeInc.fix_description = text;
-        activeInc.awaiting = null;
-        activeInc.timeline.push({
-          time: now,
-          event: `Fix applied: ${text}`,
-          actor: `<@${user_slack_id}>`,
-        });
-        await slack_reply_to_thread(
-          env.SLACK_INCIDENTS_CHANNEL,
-          thread_ts!,
-          `📝 *Fix recorded:*\n> ${text}`,
-          env.SLACK_BOT_TOKEN
-        ).catch(console.error);
-      }
-      return;
+    if (activeInc) {
+      console.log(`[events] thread reply ignored for active incident ${activeInc.incident_id} — use buttons`);
     }
-
-    // Sub-role 2b: Pending incident → B1 classification
-    const pending = claim_incident(thread_ts!);
-    if (!pending) return;
-
-    const ic_slack_id = user_slack_id;
-    const { type, impact, users_affected } = parse_ic_reply(text);
-
-    // If IC didn't include incident type, ask again
-    if (!type) {
-      register_incident(pending); // un-claim so IC can retry
-      await slack_reply_to_thread(
-        env.SLACK_INCIDENTS_CHANNEL,
-        thread_ts!,
-        `❓ Không nhận ra incident type. Vui lòng include một trong:\n\`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`\n\nVí dụ: _AVAILABILITY, 200 users, payment: yes, critical_`,
-        env.SLACK_BOT_TOKEN
-      ).catch(console.error);
-      return;
-    }
-
-    handle_b1(env, {
-      incident_id: pending.incident_id,
-      start_time: pending.start_time,
-      slack_thread_ts: pending.slack_thread_ts,
-      description: pending.description,
-      type,
-      ic_slack_id,
-      ic_name: `<@${ic_slack_id}>`,
-      users_affected,
-      impact,
-    }).catch((err) => console.error("[b1] error:", err));
   });
 
   // ── Slack interactive actions (Block Kit button clicks) ──────────────────
@@ -330,14 +262,19 @@ async function start() {
       return reply.send({ ok: false, error: "invalid payload" });
     }
 
-    if (payload.type !== "block_actions") return reply.send({ ok: true });
-
     // Ack immediately — Slack requires response within 3s
-    reply.send({ ok: true });
+    // For view_submission: empty body {} closes the modal
+    reply.send({});
 
-    handle_slack_action(env, payload).catch((err) =>
-      console.error("[actions] error:", err)
-    );
+    if (payload.type === "block_actions") {
+      handle_slack_action(env, payload as SlackActionPayload).catch((err) =>
+        console.error("[actions] error:", err)
+      );
+    } else if (payload.type === "view_submission") {
+      handle_view_submission(env, payload as unknown as ViewSubmissionPayload).catch((err) =>
+        console.error("[view] error:", err)
+      );
+    }
   });
 
   // ── TwiML endpoint — Twilio fetches this when making a phone call ───────

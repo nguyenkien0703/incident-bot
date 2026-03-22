@@ -88,6 +88,17 @@ export async function slack_reply_blocks(
 }
 
 /**
+ * Open a Slack modal. trigger_id must be used within 3 seconds of the action.
+ */
+export async function slack_open_modal(
+  trigger_id: string,
+  view: object,
+  token: string
+): Promise<void> {
+  await slackApi("views.open", { trigger_id, view }, token);
+}
+
+/**
  * Update an existing message in place (e.g. to disable buttons after a click).
  */
 export async function slack_update_message(

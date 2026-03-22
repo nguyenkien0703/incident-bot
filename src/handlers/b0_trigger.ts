@@ -9,7 +9,8 @@
 
 import { get_current_time, generate_incident_id } from "../utils/time";
 import { status_page_update } from "../tools/statuspage";
-import { slack_reply_to_thread, slack_create_thread } from "../tools/slack";
+import { slack_create_thread, slack_reply_blocks } from "../tools/slack";
+import { build_classify_button } from "../tools/slack_blocks";
 import type { Env } from "../index";
 
 export async function handle_b0(
@@ -41,21 +42,12 @@ export async function handle_b0(
     env.SLACK_BOT_TOKEN
   );
 
-  // 3. Prompt IC
-  const prompt = `Incident detected. Please provide:
-(1) *Incident Type*: \`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`
-(2) *Business Impact*:
-   - How many users affected?
-   - Payment affected? (yes/no)
-   - Data integrity risk? (yes/no)
-   - Core feature broken? (yes/no)
-   - Enterprise SLA breach? (yes/no)
-   - Technical severity: \`minor\` | \`degraded\` | \`critical\` | \`full_down\``;
-
-  await slack_reply_to_thread(
+  // 3. Post interactive "Classify Incident" button in thread
+  await slack_reply_blocks(
     env.SLACK_INCIDENTS_CHANNEL,
     thread_ts,
-    prompt,
+    build_classify_button(incident_id),
+    "Click to classify this incident",
     env.SLACK_BOT_TOKEN
   );
 

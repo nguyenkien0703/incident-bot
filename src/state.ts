@@ -46,6 +46,18 @@ export function register_incident(inc: PendingIncident): void {
   pending.set(inc.slack_thread_ts, { ...inc, classified: false });
 }
 
+/** Read a pending incident without claiming it (for building modals). */
+export function peek_incident(thread_ts: string): PendingIncident | null {
+  const inc = pending.get(thread_ts);
+  if (!inc) return null;
+  return {
+    incident_id: inc.incident_id,
+    start_time: inc.start_time,
+    slack_thread_ts: inc.slack_thread_ts,
+    description: inc.description,
+  };
+}
+
 /**
  * Atomically claim an incident for B1 classification.
  * Returns the incident data, or null if not found / already classified.
