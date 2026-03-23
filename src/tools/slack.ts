@@ -93,23 +93,68 @@ export async function slack_reply_blocks(
 }
 
 /**
+ * In-memory cache of workspace users: user_id → display name.
+ * Built lazily on first lookup failure, refreshed every hour.
+ */
+let _userCache: Map<string, string> | null = null;
+let _userCacheBuiltAt = 0;
+const USER_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function build_user_cache(token: string): Promise<Map<string, string>> {
+  const cache = new Map<string, string>();
+  let cursor: string | undefined;
+  do {
+    const data = await slackApi(
+      "users.list",
+      { limit: 200, ...(cursor ? { cursor } : {}) },
+      token
+    ).catch(() => ({ members: [], response_metadata: {} }));
+
+    for (const member of (data.members as Record<string, unknown>[]) ?? []) {
+      const profile = (member.profile as Record<string, unknown>) ?? {};
+      const name =
+        (profile.display_name as string | undefined)?.trim() ||
+        (profile.real_name as string | undefined)?.trim() ||
+        (member.name as string | undefined)?.trim();
+      if (name && member.id) cache.set(member.id as string, name);
+    }
+    cursor = ((data.response_metadata as Record<string, unknown>)?.next_cursor as string) || undefined;
+  } while (cursor);
+
+  console.log(`[slack] user cache built: ${cache.size} workspace members`);
+  return cache;
+}
+
+async function lookup_user_in_workspace(user_id: string, token: string): Promise<string | null> {
+  const now = Date.now();
+  if (!_userCache || now - _userCacheBuiltAt > USER_CACHE_TTL_MS) {
+    _userCache = await build_user_cache(token);
+    _userCacheBuiltAt = now;
+  }
+  return _userCache.get(user_id) ?? null;
+}
+
+/**
  * Resolve a Slack user_id to a human-readable display name.
+ * Strategy: users.info → workspace cache (users.list) → <@USERID> fallback
  */
 export async function slack_get_user_name(user_id: string, token: string): Promise<string> {
   try {
     const data = await slackApi("users.info", { user: user_id }, token);
     const user = data.user as Record<string, unknown>;
     const profile = (user.profile as Record<string, unknown>) ?? {};
-    // Try in order: display_name → real_name → username handle
     return (
       (profile.display_name as string | undefined)?.trim() ||
       (profile.real_name as string | undefined)?.trim() ||
       (user.name as string | undefined)?.trim() ||
       user_id
     );
-  } catch (err) {
-    console.warn(`[slack] users.info failed for ${user_id}:`, (err as Error).message);
-    return `<@${user_id}>`; // Slack renders this as the user's display name
+  } catch {
+    // users.info failed — try full workspace member list
+    const fromCache = await lookup_user_in_workspace(user_id, token);
+    if (fromCache) return fromCache;
+    console.warn(`[slack] could not resolve name for ${user_id} — not a workspace member`);
+    return `<@${user_id}>`; // Slack renders this correctly in messages
   }
 }
 
