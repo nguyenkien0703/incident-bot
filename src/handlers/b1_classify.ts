@@ -111,6 +111,7 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
   }
 
   toNotify.push(...get_by_role(contacts, "PM"));
+  toNotify.push(...get_by_role(contacts, "PO"));
 
   if (isHigh) {
     toNotify.push(...get_by_role(contacts, "DevOps"));

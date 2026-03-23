@@ -6,5 +6,52 @@
     "phone": "+84868071819",
     "email": "kiennv@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
+  },
+    {
+    "name": "Nguyen Duc Ban",
+    "role": "PO",
+    "slack_id": "U0A6JVALHNF",
+    "phone": "",
+    "email": "bannd@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+    {
+    "name": "Dinh Tien An",
+    "role": "TechLead",
+    "slack_id": "U093D0L3R8F",
+    "phone": "",
+    "email": "andt@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+    {
+    "name": "Binh Trong",
+    "role": "Dev-Be",
+    "slack_id": "U094604MTAM",
+    "phone": "",
+    "email": "trongtb@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+   {
+    "name": "Duong Hong Nam",
+    "role": "Dev-Be",
+    "slack_id": "U093MMDPLS2",
+    "phone": "",
+    "email": "namdh@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
+  }, {
+    "name": "Khoi",
+    "role": "Dev-Be",
+    "slack_id": "U093T3M9DNE",
+    "phone": "",
+    "email": "khoitt@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  {
+    "name": "Thieu",
+    "role": "Dev-Fe",
+    "slack_id": "U093MR42HSA",
+    "phone": "",
+    "email": "thieunv@savameta.com",
+    "timezone": "Asia/Ho_Chi_Minh"
   }
 ]
