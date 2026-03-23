@@ -98,8 +98,15 @@ export async function slack_reply_blocks(
 export async function slack_get_user_name(user_id: string, token: string): Promise<string> {
   try {
     const data = await slackApi("users.info", { user: user_id }, token);
-    const profile = ((data.user as Record<string, unknown>).profile as Record<string, unknown>);
-    return (profile.display_name as string || profile.real_name as string) || user_id;
+    const user = data.user as Record<string, unknown>;
+    const profile = (user.profile as Record<string, unknown>) ?? {};
+    // Try in order: display_name → real_name → username handle
+    return (
+      (profile.display_name as string | undefined)?.trim() ||
+      (profile.real_name as string | undefined)?.trim() ||
+      (user.name as string | undefined)?.trim() ||
+      user_id
+    );
   } catch (err) {
     console.warn(`[slack] users.info failed for ${user_id}:`, (err as Error).message);
     return `<@${user_id}>`; // Slack renders this as the user's display name
