@@ -98,32 +98,53 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     }
   }
 
-  // 3. Determine who to notify
+  // 3. Determine who to notify — Departments Involved Matrix
+  // Source: escalation-policy.md Section 3
+  //
+  // Type        | P3                  | P2                    | P1                          | P0
+  // AVAILABILITY| DevOps              | DevOps + TechLead     | TechLead + PO/PM            | All
+  // PERFORMANCE | DevOps              | DevOps + TechLead     | TechLead + PO/PM            | All
+  // DATA        | DevOps + TechLead   | TechLead + PO/PM      | TechLead + PO/PM + CEO      | All
+  // INTEGRATION | DevOps              | DevOps                | DevOps + TechLead           | TechLead + PO/PM
+  // SECURITY    | DevOps + TechLead   | TechLead + PO/PM      | TechLead + PO/PM + Legal    | All
   const toNotify: typeof contacts = [];
-  const isHigh = isHighSeverity(priority);
 
-  if (input.type === "DATA" || input.impact.data_integrity_affected) {
-    toNotify.push(...get_by_role(contacts, "TechLead"));
-  }
-  if (input.type === "SECURITY") {
-    toNotify.push(...get_by_role(contacts, "TechLead"));
-    toNotify.push(...get_by_role(contacts, "Legal"));
-  }
+  const addRoles = (...roles: string[]) => {
+    for (const role of roles) toNotify.push(...get_by_role(contacts, role));
+  };
 
-  toNotify.push(...get_by_role(contacts, "PM"));
-  toNotify.push(...get_by_role(contacts, "PO"));
-
-  if (isHigh) {
-    toNotify.push(...get_by_role(contacts, "DevOps"));
-  }
   if (priority === "P0") {
-    toNotify.push(...contacts); // everyone
-  }
-  if (input.type === "DATA" && isHigh) {
-    toNotify.push(...get_by_role(contacts, "CEO"));
-  }
-  if (input.type === "SECURITY" && isHigh) {
-    toNotify.push(...get_by_role(contacts, "Legal"));
+    // All team — except INTEGRATION which is only TechLead + PO/PM at P0
+    if (input.type === "INTEGRATION") {
+      addRoles("TechLead", "PO", "PM");
+    } else {
+      toNotify.push(...contacts);
+    }
+  } else if (priority === "P1") {
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE": addRoles("TechLead", "PO", "PM"); break;
+      case "DATA":        addRoles("TechLead", "PO", "PM", "CEO"); break;
+      case "INTEGRATION": addRoles("DevOps", "TechLead"); break;
+      case "SECURITY":    addRoles("TechLead", "PO", "PM", "Legal"); break;
+    }
+  } else if (priority === "P2") {
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE": addRoles("DevOps", "TechLead"); break;
+      case "DATA":        addRoles("TechLead", "PO", "PM"); break;
+      case "INTEGRATION": addRoles("DevOps"); break;
+      case "SECURITY":    addRoles("TechLead", "PO", "PM"); break;
+    }
+  } else {
+    // P3
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE":
+      case "INTEGRATION": addRoles("DevOps"); break;
+      case "DATA":        addRoles("DevOps", "TechLead"); break;
+      case "SECURITY":    addRoles("DevOps", "TechLead"); break;
+    }
   }
 
   // Deduplicate by slack_id
