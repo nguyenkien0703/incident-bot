@@ -10,7 +10,7 @@
     {
     "name": "Nguyen Duc Ban",
     "role": "PO",
-    "slack_id": "U0A6JVALHNF",
+    "slack_id": "U0A6JVALHNF1",
     "phone": "",
     "email": "bannd@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -18,7 +18,7 @@
     {
     "name": "Dinh Tien An",
     "role": "TechLead",
-    "slack_id": "U093D0L3R8F",
+    "slack_id": "U093D0L3R8F1",
     "phone": "",
     "email": "andt@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -26,7 +26,7 @@
     {
     "name": "Binh Trong",
     "role": "Dev-Be",
-    "slack_id": "U094604MTAM",
+    "slack_id": "U094604MTAM1",
     "phone": "",
     "email": "trongtb@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -34,14 +34,14 @@
    {
     "name": "Duong Hong Nam",
     "role": "Dev-Be",
-    "slack_id": "U093MMDPLS2",
+    "slack_id": "U093MMDPLS21",
     "phone": "",
     "email": "namdh@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
   }, {
     "name": "Khoi",
     "role": "Dev-Be",
-    "slack_id": "U093T3M9DNE",
+    "slack_id": "U093T3M9DNE1",
     "phone": "",
     "email": "khoitt@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
@@ -49,7 +49,7 @@
   {
     "name": "Thieu",
     "role": "Dev-Fe",
-    "slack_id": "U093MR42HSA",
+    "slack_id": "U093MR42HSA1",
     "phone": "",
     "email": "thieunv@savameta.com",
     "timezone": "Asia/Ho_Chi_Minh"
