@@ -6,6 +6,16 @@
 
 ---
 
+## Vai trò trong incident
+
+| Vai trò | Người | Trách nhiệm |
+|---|---|---|
+| **IC** (Incident Commander) | Kien (DevOps) | Điều phối: nhận thông tin từ team, cập nhật trạng thái lên Slack, communicate ra ngoài. **IC không phải người trực tiếp fix — đó là việc của cả team.** |
+| **Team** | Dev-Be, DevOps | Người trực tiếp debug và fix lỗi, báo cáo tiến độ lại cho IC |
+| **PO** | Ban | Nhận thông báo, theo dõi tiến độ, review và xác nhận action items phòng ngừa |
+
+---
+
 ## Tổng quan — Bot kích hoạt khi nào?
 
 Bot có **2 cách kích hoạt**, hoàn toàn độc lập nhau:
@@ -164,15 +174,17 @@ Bấm **"Submit"**.
 
 ---
 
-### Bước 4 — IC bắt đầu fix
+### Bước 4 — Team bắt đầu fix, IC cập nhật trạng thái
 
-**Ai làm:** Kien (IC) — click nút tiếp theo
+> **Vai trò IC:** IC **không phải người fix**. IC chịu trách nhiệm nhận thông tin từ team đang xử lý, rồi cập nhật trạng thái lên Slack để mọi người theo dõi.
+
+**Ai làm:** Kien (IC) — click nút tiếp theo sau khi team báo đã bắt đầu fix
 
 > **"🔧 2. Fix In Progress"**
 
-Popup hiện ra. Kien điền:
+Popup hiện ra. Kien điền tóm tắt những gì team đang thực hiện:
 ```
-Tăng DB connection pool size từ 10 lên 50.
+Team đang tăng DB connection pool size từ 10 lên 50.
 Restart auth service để clear stale connections.
 ```
 
