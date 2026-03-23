@@ -318,11 +318,6 @@ export function build_b5_owner_modal(metadata: string): object {
           type: "users_select",
           action_id: "owner_user",
           placeholder: { type: "plain_text", text: "Choose a team member" },
-          filter: {
-            include: ["workspace"],
-            exclude_external_shared_channels: true,
-            exclude_bot_users: true,
-          },
         },
       },
     ],
