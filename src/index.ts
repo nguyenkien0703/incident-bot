@@ -3,10 +3,19 @@ import type { Pool } from "pg";
 import { db } from "./db/client";
 import { seed_contacts } from "./db/seed";
 import { handle_b0 } from "./handlers/b0_trigger";
-import { handle_b1 } from "./handlers/b1_classify";
-import { parse_ic_reply } from "./handlers/slack_events";
-import { register_incident, claim_incident, should_trigger_incident } from "./state";
+import {
+  register_incident,
+  should_trigger_incident,
+  get_active_by_thread,
+} from "./state";
+import {
+  handle_slack_action,
+  handle_view_submission,
+  type SlackActionPayload,
+  type ViewSubmissionPayload,
+} from "./handlers/slack_actions";
 import { slack_reply_to_thread } from "./tools/slack";
+import { get_current_time } from "./utils/time";
 
 export interface Env {
   // Slack
@@ -39,8 +48,8 @@ export interface Env {
   GITHUB_REPO_OWNER: string;
   GITHUB_REPO_NAME: string;
 
-  // Anthropic
-  ANTHROPIC_API_KEY: string;
+  // OpenRouter (AI — supports any model via OpenAI-compatible API)
+  OPENROUTER_API_KEY: string;
 
   // PostgreSQL pool (injected at startup)
   db: Pool;
@@ -75,7 +84,7 @@ function buildEnv(): Env {
     GITHUB_TOKEN: process.env.GITHUB_TOKEN!,
     GITHUB_REPO_OWNER: process.env.GITHUB_REPO_OWNER!,
     GITHUB_REPO_NAME: process.env.GITHUB_REPO_NAME!,
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY!,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ?? "",
     db,
   };
 }
@@ -153,32 +162,21 @@ async function start() {
     }
   );
 
-  // ── Slack slash command: /incident start <description> ──────────────────
+  // ── Slack slash command: /incident <description> ────────────────────────
   app.post("/slack/slash", async (req, reply) => {
     const body = req.body as Record<string, string>;
-    const text = body.text ?? "";
+    const description = (body.text ?? "").trim() || "Incident reported via slash command";
 
-    if (text.startsWith("start")) {
-      const description =
-        text.replace(/^start\s*/i, "").trim() || "Incident reported via slash command";
-
-      // Respond to Slack immediately (must be within 3s or Slack times out)
-      reply.send({
-        response_type: "ephemeral",
-        text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
-      });
-
-      // Run B0 in background after replying, then register for B1
-      handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
-        .then((result) => register_incident(result))
-        .catch((err) => console.error("[b0] background error:", err));
-      return;
-    }
-
-    return reply.send({
+    // Respond to Slack immediately (must be within 3s or Slack times out)
+    reply.send({
       response_type: "ephemeral",
-      text: "Usage: `/incident start <description>`",
+      text: `⏳ Opening incident... Check <#${env.SLACK_INCIDENTS_CHANNEL}> in a moment.`,
     });
+
+    // Run B0 in background then register so IC can click "Classify Incident"
+    handle_b0(env, env.SLACK_INCIDENTS_CHANNEL, description)
+      .then((result) => register_incident(result))
+      .catch((err) => console.error("[b0] background error:", err));
   });
 
   // ── Monitoring alert webhook (Grafana, UptimeRobot, etc.) ───────────────
@@ -236,37 +234,45 @@ async function start() {
       return;
     }
 
-    // ── Role 2: Thread reply in incidents channel → B1 classification ──────
+    // ── Role 2: Thread reply in incidents channel ───────────────────────────
     if (!isThreadReply) return;
 
-    const pending = claim_incident(thread_ts!);
-    if (!pending) return;
+    const user_slack_id = (event.user as string) ?? "unknown";
 
-    const ic_slack_id = (event.user as string) ?? "unknown";
-    const { type, impact, users_affected } = parse_ic_reply(text);
+    // B5 is now fully interactive (buttons) — thread replies are ignored
+    const activeInc = get_active_by_thread(thread_ts!);
+    if (activeInc) {
+      console.log(`[events] thread reply ignored for incident ${activeInc.incident_id} — use B5 buttons`);
+    }
+  });
 
-    // If IC didn't include incident type, ask again
-    if (!type) {
-      register_incident(pending); // un-claim so IC can retry
-      await slack_reply_to_thread(
-        env.SLACK_INCIDENTS_CHANNEL,
-        thread_ts!,
-        `❓ Không nhận ra incident type. Vui lòng include một trong:\n\`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`\n\nVí dụ: _AVAILABILITY, 200 users, payment: yes, critical_`,
-        env.SLACK_BOT_TOKEN
-      ).catch(console.error);
-      return;
+  // ── Slack interactive actions (Block Kit button clicks) ──────────────────
+  app.post("/slack/actions", async (req, reply) => {
+    // Slack sends payload as URL-encoded JSON in the "payload" field
+    const body = req.body as Record<string, string>;
+    const raw = body.payload;
+    if (!raw) return reply.send({ ok: false, error: "no payload" });
+
+    let payload: SlackActionPayload;
+    try {
+      payload = JSON.parse(raw) as SlackActionPayload;
+    } catch {
+      return reply.send({ ok: false, error: "invalid payload" });
     }
 
-    handle_b1(env, {
-      incident_id: pending.incident_id,
-      start_time: pending.start_time,
-      slack_thread_ts: pending.slack_thread_ts,
-      description: pending.description,
-      type,
-      ic_name: `<@${ic_slack_id}>`,
-      users_affected,
-      impact,
-    }).catch((err) => console.error("[b1] error:", err));
+    // Ack immediately — Slack requires response within 3s
+    // For view_submission: empty body {} closes the modal
+    reply.send({});
+
+    if (payload.type === "block_actions") {
+      handle_slack_action(env, payload as SlackActionPayload).catch((err) =>
+        console.error("[actions] error:", err)
+      );
+    } else if (payload.type === "view_submission") {
+      handle_view_submission(env, payload as unknown as ViewSubmissionPayload).catch((err) =>
+        console.error("[view] error:", err)
+      );
+    }
   });
 
   // ── TwiML endpoint — Twilio fetches this when making a phone call ───────

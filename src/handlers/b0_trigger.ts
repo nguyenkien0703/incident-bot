@@ -9,7 +9,8 @@
 
 import { get_current_time, generate_incident_id } from "../utils/time";
 import { status_page_update } from "../tools/statuspage";
-import { slack_reply_to_thread, slack_create_thread } from "../tools/slack";
+import { slack_create_thread, slack_reply_blocks } from "../tools/slack";
+import { build_classify_button } from "../tools/slack_blocks";
 import type { Env } from "../index";
 
 export async function handle_b0(
@@ -24,13 +25,19 @@ export async function handle_b0(
   if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
     await status_page_update(
       "investigating",
-      "🔵 We are investigating a potential issue. Our team is checking.",
+      `🔴 [INVESTIGATING] We are investigating a reported issue. Our team is checking urgently.`,
       {
         STATUSPAGE_API_KEY: env.STATUSPAGE_API_KEY,
         STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
         STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
       }
-    ).catch((err) => console.warn("[b0] statuspage skipped:", err.message));
+    ).catch((err) => console.error("[b0] statuspage FAILED:", err.message));
+  } else {
+    console.warn("[b0] statuspage skipped — missing env vars:", {
+      hasKey: !!env.STATUSPAGE_API_KEY,
+      hasPage: !!env.STATUSPAGE_PAGE_ID,
+      hasComponent: !!env.STATUSPAGE_COMPONENT_ID,
+    });
   }
 
   // 2. Create Slack thread in #incidents (or reply in IC's channel)
@@ -41,21 +48,12 @@ export async function handle_b0(
     env.SLACK_BOT_TOKEN
   );
 
-  // 3. Prompt IC
-  const prompt = `Incident detected. Please provide:
-(1) *Incident Type*: \`AVAILABILITY\` | \`PERFORMANCE\` | \`DATA\` | \`INTEGRATION\` | \`SECURITY\`
-(2) *Business Impact*:
-   - How many users affected?
-   - Payment affected? (yes/no)
-   - Data integrity risk? (yes/no)
-   - Core feature broken? (yes/no)
-   - Enterprise SLA breach? (yes/no)
-   - Technical severity: \`minor\` | \`degraded\` | \`critical\` | \`full_down\``;
-
-  await slack_reply_to_thread(
+  // 3. Post interactive "Classify Incident" button in thread
+  await slack_reply_blocks(
     env.SLACK_INCIDENTS_CHANNEL,
     thread_ts,
-    prompt,
+    build_classify_button(incident_id),
+    "Click to classify this incident",
     env.SLACK_BOT_TOKEN
   );
 

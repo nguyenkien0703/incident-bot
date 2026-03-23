@@ -15,11 +15,18 @@ import {
   type IncidentType,
 } from "../utils/priority";
 import { get_team_contacts, get_by_role } from "../utils/contacts";
-import { get_current_time } from "../utils/time";
-import { slack_reply_to_thread, slack_post_message, slack_tag_user, slack_open_dm } from "../tools/slack";
+import { get_current_time, format_duration } from "../utils/time";
+import {
+  slack_reply_to_thread,
+  slack_post_message,
+  slack_tag_user,
+  slack_reply_blocks,
+} from "../tools/slack";
+import { build_status_buttons } from "../tools/slack_blocks";
 import { phone_call } from "../tools/twilio";
 import { status_page_update } from "../tools/statuspage";
 import { calendar_create_meeting } from "../tools/calendar";
+import { register_active_incident, type ActiveIncident } from "../state";
 import type { Env } from "../index";
 
 export interface ClassifyInput {
@@ -28,6 +35,7 @@ export interface ClassifyInput {
   slack_thread_ts: string;
   type: IncidentType;
   description: string;
+  ic_slack_id: string;
   ic_name: string;
   users_affected: number;
   impact: BusinessImpact;
@@ -90,31 +98,53 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     }
   }
 
-  // 3. Determine who to notify
+  // 3. Determine who to notify — Departments Involved Matrix
+  // Source: escalation-policy.md Section 3
+  //
+  // Type        | P3                  | P2                    | P1                          | P0
+  // AVAILABILITY| DevOps              | DevOps + TechLead     | TechLead + PO/PM            | All
+  // PERFORMANCE | DevOps              | DevOps + TechLead     | TechLead + PO/PM            | All
+  // DATA        | DevOps + TechLead   | TechLead + PO/PM      | TechLead + PO/PM + CEO      | All
+  // INTEGRATION | DevOps              | DevOps                | DevOps + TechLead           | TechLead + PO/PM
+  // SECURITY    | DevOps + TechLead   | TechLead + PO/PM      | TechLead + PO/PM + Legal    | All
   const toNotify: typeof contacts = [];
-  const isHigh = isHighSeverity(priority);
 
-  if (input.type === "DATA" || input.impact.data_integrity_affected) {
-    toNotify.push(...get_by_role(contacts, "TechLead"));
-  }
-  if (input.type === "SECURITY") {
-    toNotify.push(...get_by_role(contacts, "TechLead"));
-    toNotify.push(...get_by_role(contacts, "Legal"));
-  }
+  const addRoles = (...roles: string[]) => {
+    for (const role of roles) toNotify.push(...get_by_role(contacts, role));
+  };
 
-  toNotify.push(...get_by_role(contacts, "PM"));
-
-  if (isHigh) {
-    toNotify.push(...get_by_role(contacts, "DevOps"));
-  }
   if (priority === "P0") {
-    toNotify.push(...contacts); // everyone
-  }
-  if (input.type === "DATA" && isHigh) {
-    toNotify.push(...get_by_role(contacts, "CEO"));
-  }
-  if (input.type === "SECURITY" && isHigh) {
-    toNotify.push(...get_by_role(contacts, "Legal"));
+    // All team — except INTEGRATION which is only TechLead + PO/PM at P0
+    if (input.type === "INTEGRATION") {
+      addRoles("TechLead", "PO", "PM");
+    } else {
+      toNotify.push(...contacts);
+    }
+  } else if (priority === "P1") {
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE": addRoles("TechLead", "PO", "PM"); break;
+      case "DATA":        addRoles("TechLead", "PO", "PM", "CEO"); break;
+      case "INTEGRATION": addRoles("DevOps", "TechLead"); break;
+      case "SECURITY":    addRoles("TechLead", "PO", "PM", "Legal"); break;
+    }
+  } else if (priority === "P2") {
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE": addRoles("DevOps", "TechLead"); break;
+      case "DATA":        addRoles("TechLead", "PO", "PM"); break;
+      case "INTEGRATION": addRoles("DevOps"); break;
+      case "SECURITY":    addRoles("TechLead", "PO", "PM"); break;
+    }
+  } else {
+    // P3
+    switch (input.type) {
+      case "AVAILABILITY":
+      case "PERFORMANCE":
+      case "INTEGRATION": addRoles("DevOps"); break;
+      case "DATA":        addRoles("DevOps", "TechLead"); break;
+      case "SECURITY":    addRoles("DevOps", "TechLead"); break;
+    }
   }
 
   // Deduplicate by slack_id
@@ -127,20 +157,10 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
 
   await Promise.all(
     uniqueNotify.map(async (contact) => {
-      // Build huddle link for this user's DM channel with the bot
-      let huddleLink = "";
-      if (env.SLACK_TEAM_ID) {
-        const dmChannelId = await slack_open_dm(contact.slack_id, env.SLACK_BOT_TOKEN).catch(() => "");
-        if (dmChannelId) {
-          huddleLink = `https://app.slack.com/huddle/${env.SLACK_TEAM_ID}/${dmChannelId}`;
-        }
-      }
-
       const dm = [
         `${slack_tag_user(contact.slack_id)} 🚨 *Incident ${priority} — ${input.incident_id}*`,
         `Description: ${input.description}`,
         `Please check <#${env.SLACK_INCIDENTS_CHANNEL}> immediately.`,
-        huddleLink ? `📞 *Join Huddle ngay:* ${huddleLink}` : "",
         meetLink ? `📹 *War Room (Meet):* ${meetLink}` : "",
       ].filter(Boolean).join("\n");
 
@@ -169,9 +189,10 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
     })
   );
 
-  // 3. Update status page (best-effort)
+  // 3. Update status page (best-effort) — capture incident ID for later updates
+  let statuspage_incident_id: string | undefined;
   if (env.STATUSPAGE_API_KEY && env.STATUSPAGE_PAGE_ID && env.STATUSPAGE_COMPONENT_ID) {
-    await status_page_update(
+    statuspage_incident_id = await status_page_update(
       "investigating",
       `🔴 [INVESTIGATING] ${now} — We are experiencing an issue affecting ${input.description}. Our team is investigating. Next update within 15 minutes.`,
       {
@@ -179,8 +200,69 @@ export async function handle_b1(env: Env, input: ClassifyInput): Promise<Priorit
         STATUSPAGE_PAGE_ID: env.STATUSPAGE_PAGE_ID,
         STATUSPAGE_COMPONENT_ID: env.STATUSPAGE_COMPONENT_ID,
       }
-    ).catch((err) => console.warn("[b1] statuspage skipped:", err.message));
+    ).catch((err) => { console.warn("[b1] statuspage skipped:", err.message); return undefined; });
   }
+
+  // 4. Register active incident + post interactive status buttons
+  const activeInc: ActiveIncident = {
+    incident_id: input.incident_id,
+    start_time: input.start_time,
+    slack_thread_ts: input.slack_thread_ts,
+    slack_channel: env.SLACK_INCIDENTS_CHANNEL,
+    description: input.description,
+    type: input.type,
+    priority,
+    ic_slack_id: input.ic_slack_id,
+    ic_name: input.ic_name,
+    ic_display_name: contacts.find((c) => c.slack_id === input.ic_slack_id)?.name ?? input.ic_slack_id,
+    users_affected: input.users_affected,
+    payment_affected: input.impact.payment_affected,
+    data_integrity_affected: input.impact.data_integrity_affected,
+    phase: "investigating",
+    awaiting: null,
+    ping_count: 0,
+    statuspage_incident_id,
+    timeline: [
+      { time: input.start_time, event: "Incident detected", actor: "system" },
+      { time: now, event: `Classified as ${priority} (${input.type})`, actor: contacts.find((c) => c.slack_id === input.ic_slack_id)?.name ?? input.ic_slack_id },
+    ],
+  };
+
+  // Post the first status-button message in thread
+  await slack_reply_blocks(
+    env.SLACK_INCIDENTS_CHANNEL,
+    input.slack_thread_ts,
+    build_status_buttons(input.incident_id, "investigating"),
+    `Incident ${input.incident_id} — update the status when ready`,
+    env.SLACK_BOT_TOKEN
+  ).catch((err) => console.error("[b1] status buttons failed:", err.message));
+
+  // Start 15-minute proactive ping timer (stops automatically after 20 pings = 5h)
+  const PING_INTERVAL_MS = 3 * 60 * 1000;
+  // const PING_INTERVAL_MS =  10 * 1000;
+  activeInc.ping_timer = setInterval(async () => {
+    if (activeInc.phase === "resolved") {
+      clearInterval(activeInc.ping_timer);
+      return;
+    }
+    activeInc.ping_count++;
+    if (activeInc.ping_count > 20) {
+      clearInterval(activeInc.ping_timer);
+      return;
+    }
+    const elapsed = format_duration(activeInc.start_time, get_current_time());
+    await slack_reply_blocks(
+      env.SLACK_INCIDENTS_CHANNEL,
+      activeInc.slack_thread_ts,
+      build_status_buttons(activeInc.incident_id, activeInc.phase),
+      `⏰ Ping #${activeInc.ping_count} — ${elapsed} elapsed. Please update the incident status.`,
+      env.SLACK_BOT_TOKEN
+    ).catch((err) => console.error("[ping] failed:", err.message));
+  }, PING_INTERVAL_MS);
+
+  register_active_incident(activeInc);
 
   return priority;
 }
+
+
