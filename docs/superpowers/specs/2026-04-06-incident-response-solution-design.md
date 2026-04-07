@@ -42,124 +42,109 @@ High-level Flow: Any Team (Ops/HR/MKT/...) → Response Gateway → AI/Automatio
 ## 3. High-level Flow (Tổng quan)
 
 > **Nguyên tắc cốt lõi**: AI tự động xử lý tất cả intermediate steps.
-> Trigger có thể đến từ **bất kỳ nguồn nào** — Human, System monitoring, CI/CD, webhook — không phải chỉ từ người.
-> Human chỉ **bắt buộc xuất hiện tại 1 điểm**: **Decision** (quyết định hướng xử lý).
-> Mọi thứ ở giữa — Communicate, Analyze — là AI làm tự động.
+> Trigger có thể đến từ **bất kỳ nguồn nào** — Human, System monitoring, CI/CD, webhook.
+> Gateway **không chỉ route** — nó xử lý 4 bước phức tạp rồi output ra Report.
+> Ops Team nhận Report → từng team đọc phần liên quan → thực thi workflow của mình.
 
 ```
-  WHO / SOURCE        WHAT                          AI DOES / OUTPUT
-  ────────────────    ──────────────────────────    ────────────────────────────────
+  WHO / SOURCE              WHAT                              OUTPUT
+  ─────────────────   ──────────────────────────────   ──────────────────────
 
-  Any Team ──────┐
-  (Human)        │    ┌────────────────────────┐
-                 ├───▶│        TRIGGER          │
-  System ────────┘    │                        │
-  (tự động)           │  Engineering:          │    output:
-                      │  • User thấy app chậm  │    event object
-                      │  • Engineer phát hiện  │    {source, type,
-                      │  • Error spike alert   │     priority_hint,
-                      │  • Health check fail   │     payload,
-                      │  • CI/CD fail          │     reporter}
-                      │                        │
-                      │  HR:                   │
-                      │  • Nhân viên nghỉ việc │
-                      │  • Onboard mới         │
-                      │                        │
-                      │  Marketing:            │
-                      │  • Campaign fail       │
-                      │  • Content stuck       │
-                      │                        │
-                      │  → bất kỳ nguồn nào   │
-                      └──────────┬─────────────┘
-                                 │
-                                 ▼
-                      ┌────────────────────────┐
-                      │    RESPONSE GATEWAY    │    AI: đọc event.source
-                      │                        │    → Engineering?
-                      │  Nhận event            │      → forward Engineering workflow
-                      │  → đọc source/team     │    → HR?
-                      │  → forward đúng        │      → forward HR workflow
-                      │    workflow của        │    → Marketing?
-                      │    team đó             │      → forward MKT workflow
-                      │                        │    → Chưa có workflow?
-                      │                        │      → hỏi Human define mới
-                      └──────────┬─────────────┘
-                                 │
-                                 ▼
-  ╔════════════════════════════════════════════════════════════════╗
-  ║              AI / AUTOMATION IMPLEMENTATION                    ║
-  ║                                                                ║
-  ║  [AI ORCHESTRATOR] — điều phối toàn bộ flow,                  ║
-  ║  không đụng vào code hay production system                     ║
-  ║                                                                ║
-  ║  ┌────────────────────────────────────────────────────────┐   ║
-  ║  │ COMMUNICATE                                            │   ║
-  ║  │                                                        │   ║  • Slack thread posted
-  ║  │ AI Orchestrator:                                       │   ║  • Right people notified
-  ║  │ • Post Slack incident thread                           │   ║  • Status Page:
-  ║  │ • Tag + call right people (P0/P1 → phone)              │   ║    INVESTIGATING
-  ║  │ • Update Status Page → INVESTIGATING                   │   ║  • War room ready
-  ║  │ • Create war room (nếu P0/P1)                          │   ║
-  ║  └────────────────────────────┬───────────────────────────┘   ║
-  ║                               │                               ║
-  ║                               ▼                               ║
-  ║  ┌────────────────────────────────────────────────────────┐   ║
-  ║  │ ANALYZE                                                │   ║
-  ║  │                                                        │   ║  • Problem understood
-  ║  │ AI Orchestrator:                                       │   ║  • Impact assessed
-  ║  │ • Hiểu vấn đề đang xảy ra                             │   ║  • Info ready for
-  ║  │ • Đánh giá mức độ impact                              │   ║    Human decision
-  ║  │ • Chuẩn bị thông tin cho Human ra quyết định          │   ║
-  ║  └────────────────────────────┬───────────────────────────┘   ║
-  ║                               │                               ║
-  ║                               ▼                               ║
-  ║  ┌────────────────────────────────────────────────────────┐   ║
-  ║  │ DECISION                        ← Human bắt buộc      │   ║
-  ║  │                                                        │   ║
-  ║  │ AI Orchestrator đã chuẩn bị đủ thông tin.             │   ║  Human quyết định:
-  ║  │ Human xem xét và ra quyết định.                       │   ║  • Làm gì? (short term)
-  ║  │                                                        │   ║  • Ưu tiên gì? (long term)
-  ║  │ Lý do Human bắt buộc:                                 │   ║
-  ║  │ • Môi trường production                               │   ║
-  ║  │ • Cần người chịu trách nhiệm                          │   ║
-  ║  │ • AI không tự execute bất kỳ action nào               │   ║
-  ║  │   mà chưa có Human confirm                            │   ║
-  ║  └────────────────────────────┬───────────────────────────┘   ║
-  ║                               │ Human confirmed               ║
-  ║              ┌────────────────┴────────────────┐              ║
-  ║              ▼                                 ▼              ║
-  ║  ┌───────────────────────┐     ┌───────────────────────────┐  ║
-  ║  │      SHORT TERM       │     │        LONG TERM          │  ║
-  ║  │                       │     │                           │  ║
-  ║  │ AI Orchestrator       │     │ AI Orchestrator propose:  │  ║
-  ║  │ kích hoạt đúng        │     │ • Post-mortem draft       │  ║
-  ║  │ AI Specialist:        │     │ • Prevention plan         │  ║
-  ║  │                       │     │ • Template update         │  ║
-  ║  │ • Code AI             │     │                           │  ║
-  ║  │   → suggest/write fix │     │ Human own:                │  ║
-  ║  │ • Infra AI            │     │ • Confirm owner + ETA     │  ║
-  ║  │   → rollback, flag off│     │ • Track to closure        │  ║
-  ║  │ • Comms AI            │     │   (đảm bảo action items   │  ║
-  ║  │   → notify RESOLVED   │     │    thực sự được làm xong) │  ║
-  ║  │                       │     └───────────────────────────┘  ║
-  ║  │ Mỗi AI Specialist     │                                    ║
-  ║  │ chạy trong Sandbox    │                                    ║
-  ║  │ (Docker) — isolated   │                                    ║
-  ║  └───────────────────────┘                                    ║
-  ╚════════════════════════════════════════════════════════════════╝
+  Ops Team ────────┐
+  (tất cả          │   ┌──────────────────────────┐
+   phòng ban)      ├──▶│         TRIGGER           │
+                   │   │                          │   event object
+  System ──────────┘   │  Engineering:            │   {source, type,
+  (monitoring,         │  • API error, error spike │    payload,
+   CI/CD, webhook)     │  • Health check fail      │    reporter,
+                       │  • Engineer tự phát hiện  │    timestamp}
+                       │                          │
+                       │  HR:                     │
+                       │  • Nhân viên nghỉ việc   │
+                       │  • Onboard mới           │
+                       │                          │
+                       │  Marketing:              │
+                       │  • Campaign fail         │
+                       │  • Content stuck         │
+                       │                          │
+                       │  → bất kỳ nguồn nào      │
+                       └────────────┬─────────────┘
+                                    │
+                                    ▼
+                       ┌──────────────────────────────────────────┐
+                       │            RESPONSE GATEWAY              │
+                       │         (AI xử lý 4 bước)               │
+                       │                                          │
+                       │  1. ĐÁNH GIÁ MỨC ĐỘ NGHIÊM TRỌNG       │
+                       │     • Sự việc này quan trọng cỡ nào?    │
+                       │     • Ảnh hưởng đến bao nhiêu team?     │
+                       │     • Có phải nhân lực/hệ thống         │
+                       │       then chốt không?                  │
+                       │                                          │
+                       │  2. ĐÁNH GIÁ SỰ VIỆC XẢY RA             │
+                       │     • Bối cảnh sự việc là gì?           │
+                       │     • Nguyên nhân? Phạm vi ảnh hưởng?   │
+                       │     • Ai liên quan?                     │
+                       │                                          │
+                       │  3. GIAO VIỆC                           │
+                       │     • Team nào cần tham gia?            │
+                       │     • Phân công cụ thể cho từng bên     │
+                       │     • Ai nhận transfer công việc?       │
+                       │                                          │
+                       │  4. ĐỀ RA PHƯƠNG ÁN XỬ LÝ              │
+                       │     • Đưa ra 2-3 options                │
+                       │     • Phân tích trade-off từng option   │
+                       │     • Recommendation                    │
+                       └────────────┬─────────────────────────────┘
+                                    │
+                                    │ output: REPORT
+                                    │ (dynamic, cập nhật liên tục)
+                                    │ gồm:
+                                    │ • Severity + bối cảnh
+                                    │ • Phân công từng team
+                                    │ • Options + trade-offs
+                                    │ • Recommendation
+                                    │ • Timeline xử lý
+                                    ▼
+                       ┌──────────────────────────────────────────┐
+                       │              OPS TEAM                    │
+                       │   Nhận Report — đọc phần liên quan mình  │
+                       └────┬──────────┬──────────┬──────────┬────┘
+                            │          │          │          │
+                            ▼          ▼          ▼          ▼
+                     [Engineering] [HR team] [MKT team] [Admin...]
+                       workflow     workflow   workflow   workflow
+                      (nếu liên   (nếu liên  (nếu liên  (nếu liên
+                        quan)       quan)      quan)      quan)
+                            │          │          │          │
+                            └──────────┴──────────┴──────────┘
+                                               │
+                                               ▼
+                                    ┌─────────────────────┐
+                                    │  INCIDENT REPORT    │
+                                    │  (dynamic update)   │
+                                    │                     │
+                                    │  AI tự động:        │
+                                    │  • Cập nhật status  │
+                                    │  • Track timeline   │
+                                    │  • Propose          │
+                                    │    prevention plan  │
+                                    │                     │
+                                    │  Human own:         │
+                                    │  • Confirm owner    │
+                                    │  • Set ETA          │
+                                    │  • Track to closure │
+                                    └─────────────────────┘
 ```
 
-### AI làm gì ở từng bước
+### Tóm tắt vai trò từng thành phần
 
-| Bước | Actor | AI làm | Human làm |
-|---|---|---|---|
-| **Trigger** | Human hoặc System | Nhận + normalize event | Phát hiện / báo cáo *(nếu human)* |
-| **Response Gateway** | AI | Đọc source → forward đúng workflow | Không cần làm gì |
-| **Communicate** | AI | Post Slack, gọi điện, update Status Page | Không cần làm gì |
-| **Analyze** | AI | Hiểu vấn đề, đánh giá impact, chuẩn bị thông tin | Không cần làm gì |
-| **Decision** | **Human bắt buộc** | Trình bày thông tin đã chuẩn bị | **Ra quyết định — production cần người chịu trách nhiệm** |
-| **Short term** | AI | Execute **đúng theo quyết định của Human**, không tự ý làm thêm | Confirm trước khi AI execute |
-| **Long term** | AI + Human | Draft post-mortem, propose prevention plan | **Own action items, confirm owner + ETA** |
+| Thành phần | Làm gì | Output |
+|---|---|---|
+| **Trigger** | Nhận event từ bất kỳ nguồn nào | Event object chuẩn |
+| **Response Gateway** | 4 bước: đánh giá severity → đánh giá sự việc → giao việc → đề ra options + trade-offs | Report đầy đủ |
+| **Ops Team** | Nhận report → team nào liên quan thì xử lý workflow của mình | Actions executed |
+| **Incident Report** | AI cập nhật liên tục, Human confirm owner + ETA, track to closure | Closed incident |
 
 ---
 
